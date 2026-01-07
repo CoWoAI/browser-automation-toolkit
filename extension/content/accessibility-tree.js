@@ -4,31 +4,6 @@
 (function() {
   'use strict';
 
-  console.log('[BrowserTaskExecutor] Content script loaded on:', window.location.href);
-
-  // Listen for commands from bridge (MAIN world) via custom event
-  document.addEventListener('__browserExecutorCommand', async (event) => {
-    const data = event.detail;
-    console.log('[BrowserTaskExecutor] Received command from bridge:', data);
-
-    try {
-      const response = await chrome.runtime.sendMessage(data.command);
-      console.log('[BrowserTaskExecutor] Got response:', response);
-
-      // Send response back to bridge via custom event
-      const responseEvent = new CustomEvent('__browserExecutorResponse', {
-        detail: { type: 'BROWSER_EXECUTOR_RESPONSE', id: data.id, response }
-      });
-      document.dispatchEvent(responseEvent);
-    } catch (e) {
-      console.error('[BrowserTaskExecutor] Error:', e.message);
-      const responseEvent = new CustomEvent('__browserExecutorResponse', {
-        detail: { type: 'BROWSER_EXECUTOR_RESPONSE', id: data.id, error: e.message }
-      });
-      document.dispatchEvent(responseEvent);
-    }
-  });
-
   // Initialize global state
   if (!window.__elementMap) {
     window.__elementMap = {};

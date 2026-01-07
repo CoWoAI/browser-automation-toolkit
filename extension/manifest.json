@@ -1,13 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Browser Task Executor",
+  "name": "Browser Automation Toolkit",
   "version": "1.0.0",
-  "description": "Execute browser automation tasks via native messaging",
+  "description": "Browser automation via HTTP API",
   "permissions": [
-    "activeTab",
     "scripting",
     "tabs",
-    "nativeMessaging"
+    "cookies",
+    "storage",
+    "downloads",
+    "debugger",
+    "webNavigation",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -25,7 +29,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Browser Task Executor"
+    "default_title": "Browser Automation Toolkit"
   },
   "externally_connectable": {
     "matches": ["http://localhost/*", "http://127.0.0.1/*", "https://localhost/*", "https://127.0.0.1/*"]

@@ -1,197 +1,149 @@
-// Service Worker - Browser Task Executor
-// Handles native messaging and tool execution
+// Browser Automation Toolkit - Service Worker
+// Handles HTTP polling and tool execution
 
-console.log('[ServiceWorker] ====== SERVICE WORKER LOADING ======');
-console.log('[ServiceWorker] Time:', new Date().toISOString());
+const COMMAND_SERVER_URL = 'http://127.0.0.1:8766';
 
-const NATIVE_HOST_NAME = 'com.anthropic.browser_task_executor';
+console.log('[BAT] Service worker starting...');
 
-let nativePort = null;
+// ============ UTILITY FUNCTIONS ============
 
-// Connect to native host
-function connectNativeHost() {
-  console.log('[ServiceWorker] Attempting to connect to native host...');
-  if (nativePort) {
-    console.log('[ServiceWorker] Already connected to native host');
-    return nativePort;
-  }
-
-  try {
-    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-
-    nativePort.onMessage.addListener((message) => {
-      console.log('[ServiceWorker] Received from native host:', message);
-      handleToolRequest(message);
-    });
-
-    nativePort.onDisconnect.addListener(() => {
-      console.log('[ServiceWorker] Native host disconnected');
-      if (chrome.runtime.lastError) {
-        console.error('[ServiceWorker] Disconnect error:', chrome.runtime.lastError.message);
-      }
-      nativePort = null;
-    });
-
-    console.log('[ServiceWorker] Connected to native host successfully');
-    return nativePort;
-  } catch (e) {
-    console.error('[ServiceWorker] Failed to connect to native host:', e);
-    return null;
-  }
-}
-
-// Send response back to native host
-function sendResponse(id, success, result, error) {
-  const response = { id, success, result, error };
-  console.log('[ServiceWorker] Sending response:', { id, success, hasResult: !!result, error });
-  if (nativePort) {
-    nativePort.postMessage(response);
-  }
-  return response;
-}
-
-// Get active tab, or fallback to first available tab
 async function getActiveTab() {
-  console.log('[ServiceWorker] Getting active tab...');
-
-  // Try active tab in current window
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab) {
-    console.log('[ServiceWorker] Active tab:', { id: tab.id, url: tab.url });
-    return tab;
-  }
+  if (tab) return tab;
 
-  // Try active tab in any window
   [tab] = await chrome.tabs.query({ active: true });
-  if (tab) {
-    console.log('[ServiceWorker] Active tab (any window):', { id: tab.id, url: tab.url });
-    return tab;
-  }
+  if (tab) return tab;
 
-  // Fallback to first non-extension tab
   const tabs = await chrome.tabs.query({});
-  tab = tabs.find(t => !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'));
-  if (tab) {
-    console.log('[ServiceWorker] Fallback tab:', { id: tab.id, url: tab.url });
-    return tab;
-  }
-
-  // Last resort: any tab
-  if (tabs.length > 0) {
-    console.log('[ServiceWorker] Last resort tab:', { id: tabs[0].id, url: tabs[0].url });
-    return tabs[0];
-  }
-
-  console.log('[ServiceWorker] No tabs found');
-  return null;
+  tab = tabs.find(t => !t.url?.startsWith('chrome://') && !t.url?.startsWith('chrome-extension://'));
+  return tab || tabs[0] || null;
 }
 
-// Get tab by ID or active tab
-async function getTab(tabId) {
-  if (tabId) {
-    return await chrome.tabs.get(tabId);
-  }
-  return await getActiveTab();
-}
-
-// Inject content script if not already loaded
-async function ensureContentScriptLoaded(tabId) {
-  console.log('[ServiceWorker] Checking if content script is loaded in tab:', tabId);
+async function ensureContentScript(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => document.documentElement.getAttribute('data-browser-executor')
+      func: () => typeof window.__generateAccessibilityTree === 'function'
     });
-    if (results[0]?.result === 'loaded') {
-      console.log('[ServiceWorker] Content script already loaded');
-      return true;
-    }
-  } catch (e) {
-    console.log('[ServiceWorker] Could not check content script status:', e.message);
-  }
+    if (results[0]?.result) return true;
+  } catch (e) { /* ignore */ }
 
-  // Inject bridge into MAIN world (receives postMessage from page)
-  console.log('[ServiceWorker] Injecting bridge into MAIN world...');
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content/bridge.js'],
-      world: 'MAIN'
-    });
-    console.log('[ServiceWorker] Bridge injected into MAIN world');
-
-    // Inject content script into ISOLATED world (has chrome.runtime access)
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content/accessibility-tree.js']
     });
-    console.log('[ServiceWorker] Content script injected into ISOLATED world');
     return true;
   } catch (e) {
-    console.error('[ServiceWorker] Failed to inject scripts:', e.message);
+    console.error('[BAT] Failed to inject content script:', e.message);
     return false;
   }
 }
 
-// Execute script in tab
-async function executeScript(tabId, func, args = []) {
-  console.log('[ServiceWorker] Executing script in tab:', tabId);
+async function executeInTab(tabId, func, args = []) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func,
     args
   });
-  console.log('[ServiceWorker] Script result:', results[0]?.result ? 'got result' : 'no result');
   return results[0]?.result;
 }
 
-// Tool handlers
-const toolHandlers = {
-  // Read page accessibility tree
+// ============ TOOL HANDLERS ============
+
+const tools = {
+  // ---- Navigation ----
+  async navigate({ url, direction }, tabId) {
+    if (direction === 'back') {
+      await chrome.tabs.goBack(tabId);
+      return { success: true, action: 'back' };
+    }
+    if (direction === 'forward') {
+      await chrome.tabs.goForward(tabId);
+      return { success: true, action: 'forward' };
+    }
+    if (direction === 'reload' || !url) {
+      await chrome.tabs.reload(tabId);
+      return { success: true, action: 'reload' };
+    }
+    await chrome.tabs.update(tabId, { url });
+    return { success: true, url };
+  },
+
+  async reload({ ignoreCache = false }, tabId) {
+    await chrome.tabs.reload(tabId, { bypassCache: ignoreCache });
+    return { success: true };
+  },
+
+  // ---- Screenshots ----
+  async screenshot({ fullPage = false, quality = 90, format = 'png' }, tabId) {
+    const tab = await chrome.tabs.get(tabId);
+
+    if (fullPage) {
+      // Full page screenshot via scrolling
+      const pageInfo = await executeInTab(tabId, () => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        scrollWidth: document.documentElement.scrollWidth,
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+        scrollY: window.scrollY
+      }));
+
+      // For now, just capture viewport (full page requires more complex stitching)
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format, quality: format === 'jpeg' ? quality : undefined });
+      return { image: dataUrl, viewport: { width: pageInfo.viewportWidth, height: pageInfo.viewportHeight }, fullPage: false, note: 'Full page capture not yet implemented, returning viewport' };
+    }
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format, quality: format === 'jpeg' ? quality : undefined });
+    const viewport = await executeInTab(tabId, () => ({ width: window.innerWidth, height: window.innerHeight }));
+    return { image: dataUrl, viewport };
+  },
+
+  // ---- Page Content ----
   async read_page({ filter = 'all', depth = 15, ref_id = null }, tabId) {
-    console.log('[ServiceWorker] read_page:', { filter, depth, ref_id, tabId });
-    const result = await executeScript(tabId, (f, d, r) => {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (f, d, r) => {
       return window.__generateAccessibilityTree?.(f, d, r) || { error: 'Content script not loaded' };
     }, [filter, depth, ref_id]);
-    return result;
   },
 
-  // Take screenshot
-  async screenshot({}, tabId) {
-    console.log('[ServiceWorker] screenshot for tab:', tabId);
-    const tab = await chrome.tabs.get(tabId);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-
-    // Get viewport dimensions
-    const viewport = await executeScript(tabId, () => ({
-      width: window.innerWidth,
-      height: window.innerHeight
-    }));
-
-    console.log('[ServiceWorker] Screenshot captured, viewport:', viewport);
-    return {
-      image: dataUrl,
-      viewport
-    };
+  async get_html({ selector, outer = true }, tabId) {
+    return await executeInTab(tabId, (sel, outer) => {
+      if (sel) {
+        const el = document.querySelector(sel);
+        if (!el) return { success: false, error: 'Element not found' };
+        return { success: true, html: outer ? el.outerHTML : el.innerHTML };
+      }
+      return { success: true, html: document.documentElement.outerHTML };
+    }, [selector, outer]);
   },
 
-  // Click element
-  async click({ coordinate, ref, button = 'left' }, tabId) {
-    console.log('[ServiceWorker] click:', { coordinate, ref, button, tabId });
+  async get_text({ selector }, tabId) {
+    return await executeInTab(tabId, (sel) => {
+      if (sel) {
+        const el = document.querySelector(sel);
+        if (!el) return { success: false, error: 'Element not found' };
+        return { success: true, text: el.textContent };
+      }
+      return { success: true, text: document.body.innerText };
+    }, [selector]);
+  },
+
+  // ---- Element Interaction ----
+  async click({ ref, coordinate, button = 'left', clickCount = 1, modifiers = {} }, tabId) {
+    await ensureContentScript(tabId);
+
     if (ref) {
-      // Click by ref ID
-      const result = await executeScript(tabId, (refId, btn) => {
-        return window.__clickElementByRef?.(refId, btn) || { success: false, error: 'Content script not loaded' };
-      }, [ref, button]);
-      return result;
-    } else if (coordinate) {
-      // Click by coordinates using chrome.debugger or DOM
+      return await executeInTab(tabId, (refId, btn, count, mods) => {
+        return window.__clickElementByRef?.(refId, btn, count, mods) || { success: false, error: 'Content script not loaded' };
+      }, [ref, button, clickCount, modifiers]);
+    }
+
+    if (coordinate) {
       const [x, y] = coordinate;
-      const result = await executeScript(tabId, (cx, cy, btn) => {
-        const element = document.elementFromPoint(cx, cy);
-        if (!element) {
-          return { success: false, error: 'No element at coordinates' };
-        }
+      return await executeInTab(tabId, (cx, cy, btn, count, mods) => {
+        const el = document.elementFromPoint(cx, cy);
+        if (!el) return { success: false, error: 'No element at coordinates' };
 
         const eventInit = {
           bubbles: true,
@@ -199,85 +151,267 @@ const toolHandlers = {
           view: window,
           clientX: cx,
           clientY: cy,
-          button: btn === 'right' ? 2 : 0
+          button: btn === 'right' ? 2 : btn === 'middle' ? 1 : 0,
+          ctrlKey: mods.ctrl || false,
+          shiftKey: mods.shift || false,
+          altKey: mods.alt || false,
+          metaKey: mods.meta || false
         };
 
-        element.dispatchEvent(new MouseEvent('mousedown', eventInit));
-        element.dispatchEvent(new MouseEvent('mouseup', eventInit));
-        element.dispatchEvent(new MouseEvent('click', eventInit));
-
-        return { success: true, element: element.tagName };
-      }, [x, y, button]);
-      return result;
-    } else {
-      return { success: false, error: 'Must provide either coordinate or ref' };
-    }
-  },
-
-  // Type text
-  async type({ text, ref }, tabId) {
-    console.log('[ServiceWorker] type:', { text, ref, tabId });
-    const result = await executeScript(tabId, (refId, txt) => {
-      return window.__typeIntoElement?.(refId, txt) || { success: false, error: 'Content script not loaded' };
-    }, [ref, text]);
-    return result;
-  },
-
-  // Navigate
-  async navigate({ url, direction }, tabId) {
-    console.log('[ServiceWorker] navigate:', { url, direction, tabId });
-    if (direction === 'back') {
-      await chrome.tabs.goBack(tabId);
-      return { success: true, action: 'back' };
-    } else if (direction === 'forward') {
-      await chrome.tabs.goForward(tabId);
-      return { success: true, action: 'forward' };
-    } else if (url) {
-      await chrome.tabs.update(tabId, { url });
-      return { success: true, url };
-    } else {
-      return { success: false, error: 'Must provide url or direction' };
-    }
-  },
-
-  // Scroll
-  async scroll({ direction, amount = 300 }, tabId) {
-    console.log('[ServiceWorker] scroll:', { direction, amount, tabId });
-    const result = await executeScript(tabId, (dir, amt) => {
-      return window.__scrollPage?.(dir, amt) || { success: false, error: 'Content script not loaded' };
-    }, [direction, amount]);
-    return result;
-  },
-
-  // Execute arbitrary script
-  async execute_script({ code }, tabId) {
-    console.log('[ServiceWorker] execute_script in tab:', tabId);
-    try {
-      const result = await executeScript(tabId, (c) => {
-        try {
-          return { success: true, result: eval(c) };
-        } catch (e) {
-          return { success: false, error: e.message };
+        for (let i = 0; i < count; i++) {
+          el.dispatchEvent(new MouseEvent('mousedown', eventInit));
+          el.dispatchEvent(new MouseEvent('mouseup', eventInit));
+          el.dispatchEvent(new MouseEvent('click', eventInit));
         }
-      }, [code]);
-      return result;
-    } catch (e) {
-      return { success: false, error: e.message };
+        if (count === 2) el.dispatchEvent(new MouseEvent('dblclick', eventInit));
+
+        return { success: true, element: el.tagName, coordinates: [cx, cy] };
+      }, [x, y, button, clickCount, modifiers]);
     }
+
+    return { success: false, error: 'Must provide ref or coordinate' };
   },
 
-  // Wait
-  async wait({ ms }) {
-    console.log('[ServiceWorker] wait:', ms, 'ms');
-    await new Promise(resolve => setTimeout(resolve, ms));
-    return { success: true, waited: ms };
+  async type({ text, ref, delay = 0, clear = false }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (txt, refId, clr) => {
+      let el = refId ? window.__getElementByRef?.(refId) : document.activeElement;
+      if (!el) return { success: false, error: refId ? `Element ${refId} not found` : 'No active element' };
+
+      el.focus();
+      if (clr && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+        el.value = '';
+      }
+
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        el.value += txt;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (el.isContentEditable) {
+        document.execCommand('insertText', false, txt);
+      } else {
+        return { success: false, error: 'Element is not editable' };
+      }
+
+      return { success: true };
+    }, [text, ref, clear]);
   },
 
-  // Get tabs info
-  async get_tabs({}) {
-    console.log('[ServiceWorker] get_tabs');
+  async fill({ ref, value }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId, val) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+
+      el.focus();
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { success: true };
+      }
+      return { success: false, error: 'Element is not an input' };
+    }, [ref, value]);
+  },
+
+  async select({ ref, value }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId, val) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el || el.tagName !== 'SELECT') return { success: false, error: 'Not a select element' };
+
+      const option = Array.from(el.options).find(o => o.value === val || o.text === val);
+      if (!option) return { success: false, error: `Option "${val}" not found` };
+
+      el.value = option.value;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { success: true, selected: option.value };
+    }, [ref, value]);
+  },
+
+  async check({ ref, checked = true }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId, check) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+      if (el.type !== 'checkbox' && el.type !== 'radio') {
+        return { success: false, error: 'Not a checkbox or radio' };
+      }
+
+      if (el.checked !== check) {
+        el.click();
+      }
+      return { success: true, checked: el.checked };
+    }, [ref, checked]);
+  },
+
+  async focus({ ref }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+      el.focus();
+      return { success: true };
+    }, [ref]);
+  },
+
+  async blur({ ref }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId) => {
+      const el = refId ? window.__getElementByRef?.(refId) : document.activeElement;
+      if (el) el.blur();
+      return { success: true };
+    }, [ref]);
+  },
+
+  async hover({ ref, coordinate }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId, coord) => {
+      let el, x, y;
+      if (refId) {
+        el = window.__getElementByRef?.(refId);
+        if (!el) return { success: false, error: `Element ${refId} not found` };
+        const rect = el.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.top + rect.height / 2;
+      } else if (coord) {
+        [x, y] = coord;
+        el = document.elementFromPoint(x, y);
+      } else {
+        return { success: false, error: 'Must provide ref or coordinate' };
+      }
+
+      if (el) {
+        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: x, clientY: y }));
+        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: x, clientY: y }));
+        el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+      }
+      return { success: true, coordinates: [x, y] };
+    }, [ref, coordinate]);
+  },
+
+  // ---- Keyboard ----
+  async press({ key, modifiers = {} }, tabId) {
+    return await executeInTab(tabId, (k, mods) => {
+      const eventInit = {
+        key: k,
+        code: k,
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: mods.ctrl || false,
+        shiftKey: mods.shift || false,
+        altKey: mods.alt || false,
+        metaKey: mods.meta || false
+      };
+
+      const el = document.activeElement || document.body;
+      el.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+      el.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+      el.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+      return { success: true, key: k };
+    }, [key, modifiers]);
+  },
+
+  async keyboard({ action, key, text }, tabId) {
+    return await executeInTab(tabId, (act, k, txt) => {
+      const el = document.activeElement || document.body;
+      const eventInit = { key: k, code: k, bubbles: true, cancelable: true };
+
+      if (act === 'down') {
+        el.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+      } else if (act === 'up') {
+        el.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+      } else if (act === 'press') {
+        el.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+        el.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+      } else if (act === 'type' && txt) {
+        for (const char of txt) {
+          el.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+        }
+      }
+      return { success: true };
+    }, [action, key, text]);
+  },
+
+  // ---- Mouse ----
+  async mouse({ action, x, y, button = 'left' }, tabId) {
+    return await executeInTab(tabId, (act, mx, my, btn) => {
+      const el = document.elementFromPoint(mx, my) || document.body;
+      const eventInit = {
+        clientX: mx,
+        clientY: my,
+        button: btn === 'right' ? 2 : btn === 'middle' ? 1 : 0,
+        bubbles: true,
+        cancelable: true
+      };
+
+      if (act === 'move') {
+        el.dispatchEvent(new MouseEvent('mousemove', eventInit));
+      } else if (act === 'down') {
+        el.dispatchEvent(new MouseEvent('mousedown', eventInit));
+      } else if (act === 'up') {
+        el.dispatchEvent(new MouseEvent('mouseup', eventInit));
+      } else if (act === 'click') {
+        el.dispatchEvent(new MouseEvent('click', eventInit));
+      }
+      return { success: true };
+    }, [action, x, y, button]);
+  },
+
+  async drag({ from, to }, tabId) {
+    return await executeInTab(tabId, (f, t) => {
+      const startEl = document.elementFromPoint(f[0], f[1]);
+      const endEl = document.elementFromPoint(t[0], t[1]);
+
+      if (startEl) {
+        startEl.dispatchEvent(new MouseEvent('mousedown', { clientX: f[0], clientY: f[1], bubbles: true }));
+        startEl.dispatchEvent(new DragEvent('dragstart', { clientX: f[0], clientY: f[1], bubbles: true }));
+      }
+
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: t[0], clientY: t[1], bubbles: true }));
+
+      if (endEl) {
+        endEl.dispatchEvent(new DragEvent('dragover', { clientX: t[0], clientY: t[1], bubbles: true }));
+        endEl.dispatchEvent(new DragEvent('drop', { clientX: t[0], clientY: t[1], bubbles: true }));
+        endEl.dispatchEvent(new MouseEvent('mouseup', { clientX: t[0], clientY: t[1], bubbles: true }));
+      }
+
+      return { success: true, from: f, to: t };
+    }, [from, to]);
+  },
+
+  // ---- Scrolling ----
+  async scroll({ direction, amount = 300, ref, coordinate }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (dir, amt, refId, coord) => {
+      if (refId) {
+        const el = window.__getElementByRef?.(refId);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return { success: true, scrolledTo: refId };
+      }
+
+      const scrollMap = { up: [0, -amt], down: [0, amt], left: [-amt, 0], right: [amt, 0] };
+      const [x, y] = scrollMap[dir] || [0, 0];
+      window.scrollBy({ left: x, top: y, behavior: 'smooth' });
+      return { success: true, scrollX: window.scrollX, scrollY: window.scrollY };
+    }, [direction, amount, ref, coordinate]);
+  },
+
+  async scroll_to({ ref }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return { success: true };
+    }, [ref]);
+  },
+
+  // ---- Tabs ----
+  async get_tabs() {
     const tabs = await chrome.tabs.query({});
-    console.log('[ServiceWorker] Found', tabs.length, 'tabs');
     return {
       success: true,
       tabs: tabs.map(t => ({
@@ -290,112 +424,335 @@ const toolHandlers = {
     };
   },
 
-  // Create new tab
-  async create_tab({ url }) {
-    console.log('[ServiceWorker] create_tab:', url);
-    const tab = await chrome.tabs.create({ url: url || 'about:blank' });
+  async create_tab({ url, active = true }) {
+    const tab = await chrome.tabs.create({ url: url || 'about:blank', active });
     return { success: true, tabId: tab.id };
   },
 
-  // Inject content script manually
-  async inject_content_script({}, tabId) {
-    console.log('[ServiceWorker] inject_content_script for tab:', tabId);
-    const success = await ensureContentScriptLoaded(tabId);
-    return { success };
+  async close_tab({ tabId }) {
+    await chrome.tabs.remove(tabId || (await getActiveTab()).id);
+    return { success: true };
+  },
+
+  async switch_tab({ tabId }) {
+    await chrome.tabs.update(tabId, { active: true });
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    return { success: true };
+  },
+
+  // ---- Wait ----
+  async wait({ ms }) {
+    await new Promise(r => setTimeout(r, ms));
+    return { success: true, waited: ms };
+  },
+
+  async wait_for({ ref, selector, state = 'visible', timeout = 5000 }, tabId) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const result = await executeInTab(tabId, (refId, sel, st) => {
+        let el;
+        if (refId) el = window.__getElementByRef?.(refId);
+        else if (sel) el = document.querySelector(sel);
+        if (!el) return { found: false };
+
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+
+        if (st === 'attached') return { found: true };
+        if (st === 'visible') return { found: visible };
+        if (st === 'hidden') return { found: !visible };
+        return { found: true };
+      }, [ref, selector, state]);
+
+      if (result?.found) return { success: true, elapsed: Date.now() - start };
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return { success: false, error: `Timeout waiting for element (${timeout}ms)` };
+  },
+
+  async wait_for_navigation({ timeout = 30000 }, tabId) {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        chrome.webNavigation.onCompleted.removeListener(listener);
+        resolve({ success: false, error: 'Navigation timeout' });
+      }, timeout);
+
+      const listener = (details) => {
+        if (details.tabId === tabId && details.frameId === 0) {
+          clearTimeout(timer);
+          chrome.webNavigation.onCompleted.removeListener(listener);
+          resolve({ success: true, url: details.url });
+        }
+      };
+      chrome.webNavigation.onCompleted.addListener(listener);
+    });
+  },
+
+  // ---- Execute Script ----
+  async execute_script({ code, args = [] }, tabId) {
+    try {
+      const result = await executeInTab(tabId, (c, a) => {
+        try {
+          const fn = new Function(...a.map((_, i) => `arg${i}`), c);
+          return { success: true, result: fn(...a) };
+        } catch (e) {
+          return { success: false, error: e.message };
+        }
+      }, [code, args]);
+      return result;
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  },
+
+  async evaluate({ code, args = [] }, tabId) {
+    return tools.execute_script({ code, args }, tabId);
+  },
+
+  // ---- Cookies ----
+  async get_cookies({ url, name }) {
+    const query = {};
+    if (url) query.url = url;
+    if (name) query.name = name;
+    const cookies = await chrome.cookies.getAll(query);
+    return { success: true, cookies };
+  },
+
+  async set_cookie({ cookie }) {
+    const result = await chrome.cookies.set(cookie);
+    return { success: !!result, cookie: result };
+  },
+
+  async delete_cookies({ url, name }) {
+    if (url && name) {
+      await chrome.cookies.remove({ url, name });
+    } else {
+      const cookies = await chrome.cookies.getAll(url ? { url } : {});
+      for (const c of cookies) {
+        await chrome.cookies.remove({ url: `https://${c.domain}${c.path}`, name: c.name });
+      }
+    }
+    return { success: true };
+  },
+
+  // ---- Storage ----
+  async get_storage({ type, key }, tabId) {
+    return await executeInTab(tabId, (t, k) => {
+      const storage = t === 'session' ? sessionStorage : localStorage;
+      if (k) return { success: true, value: storage.getItem(k) };
+      const items = {};
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        items[key] = storage.getItem(key);
+      }
+      return { success: true, items };
+    }, [type, key]);
+  },
+
+  async set_storage({ type, key, value }, tabId) {
+    return await executeInTab(tabId, (t, k, v) => {
+      const storage = t === 'session' ? sessionStorage : localStorage;
+      storage.setItem(k, v);
+      return { success: true };
+    }, [type, key, value]);
+  },
+
+  async clear_storage({ type }, tabId) {
+    return await executeInTab(tabId, (t) => {
+      const storage = t === 'session' ? sessionStorage : localStorage;
+      storage.clear();
+      return { success: true };
+    }, [type]);
+  },
+
+  // ---- Page Info ----
+  async get_url({}, tabId) {
+    const tab = await chrome.tabs.get(tabId);
+    return { success: true, url: tab.url };
+  },
+
+  async get_title({}, tabId) {
+    const tab = await chrome.tabs.get(tabId);
+    return { success: true, title: tab.title };
+  },
+
+  async get_viewport({}, tabId) {
+    return await executeInTab(tabId, () => ({
+      success: true,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio
+    }));
+  },
+
+  async set_viewport({ width, height }, tabId) {
+    // Can't actually resize viewport from extension, but we can note the request
+    return { success: false, error: 'Cannot resize viewport from extension. Use browser window controls.' };
+  },
+
+  // ---- Element Queries ----
+  async find({ selector }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { success: false, error: 'Element not found' };
+
+      // Generate ref
+      if (!window.__elementMap) window.__elementMap = {};
+      if (!window.__refCounter) window.__refCounter = 0;
+      const refId = `ref_${++window.__refCounter}`;
+      window.__elementMap[refId] = new WeakRef(el);
+
+      return { success: true, ref: refId, tag: el.tagName.toLowerCase() };
+    }, [selector]);
+  },
+
+  async find_all({ selector, limit = 100 }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (sel, lim) => {
+      const elements = Array.from(document.querySelectorAll(sel)).slice(0, lim);
+      if (!window.__elementMap) window.__elementMap = {};
+      if (!window.__refCounter) window.__refCounter = 0;
+
+      const refs = elements.map(el => {
+        const refId = `ref_${++window.__refCounter}`;
+        window.__elementMap[refId] = new WeakRef(el);
+        return { ref: refId, tag: el.tagName.toLowerCase() };
+      });
+
+      return { success: true, elements: refs, count: refs.length };
+    }, [selector, limit]);
+  },
+
+  async find_by_text({ text, exact = false }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (txt, ex) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while (node = walker.nextNode()) {
+        const content = node.textContent.trim();
+        const match = ex ? content === txt : content.includes(txt);
+        if (match && node.parentElement) {
+          if (!window.__elementMap) window.__elementMap = {};
+          if (!window.__refCounter) window.__refCounter = 0;
+          const refId = `ref_${++window.__refCounter}`;
+          window.__elementMap[refId] = new WeakRef(node.parentElement);
+          return { success: true, ref: refId, tag: node.parentElement.tagName.toLowerCase(), text: content };
+        }
+      }
+      return { success: false, error: 'Element with text not found' };
+    }, [text, exact]);
+  },
+
+  async get_element_info({ ref }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+
+      return {
+        success: true,
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        className: el.className || null,
+        text: el.textContent?.substring(0, 200),
+        value: el.value,
+        href: el.href,
+        src: el.src,
+        attributes: Object.fromEntries(Array.from(el.attributes).map(a => [a.name, a.value])),
+        boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+      };
+    }, [ref]);
+  },
+
+  async get_bounding_box({ ref }, tabId) {
+    await ensureContentScript(tabId);
+    return await executeInTab(tabId, (refId) => {
+      const el = window.__getElementByRef?.(refId);
+      if (!el) return { success: false, error: `Element ${refId} not found` };
+      const rect = el.getBoundingClientRect();
+      return { success: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    }, [ref]);
+  },
+
+  // ---- Files ----
+  async set_file({ ref, files }, tabId) {
+    // File inputs are tricky from extensions - this is a placeholder
+    return { success: false, error: 'File input not yet supported from extension' };
+  },
+
+  // ---- Dialogs ----
+  async handle_dialog({ action, text }) {
+    // Would need debugger API for this
+    return { success: false, error: 'Dialog handling requires debugger API - not yet implemented' };
+  },
+
+  // ---- PDF ----
+  async save_pdf({ options = {} }, tabId) {
+    // Would need debugger API for this
+    return { success: false, error: 'PDF saving requires debugger API - not yet implemented' };
+  },
+
+  // ---- Network ----
+  async get_network_requests({ filter }) {
+    // Would need webRequest storage
+    return { success: false, error: 'Network request capture not yet implemented' };
+  },
+
+  // ---- Utility (handled by server) ----
+  async ping() {
+    return { success: true, pong: true };
+  },
+
+  async get_tools() {
+    return { success: true, tools: Object.keys(tools) };
   }
 };
 
-// Handle tool request from native host or popup
+// ============ REQUEST HANDLER ============
+
 async function handleToolRequest(message) {
   const { id, tool, args = {}, tabId } = message;
 
-  console.log(`[ServiceWorker] ====== TOOL REQUEST ======`);
-  console.log(`[ServiceWorker] Tool: ${tool}`);
-  console.log(`[ServiceWorker] Args:`, args);
-  console.log(`[ServiceWorker] TabId:`, tabId);
-
   try {
-    const handler = toolHandlers[tool];
+    const handler = tools[tool];
     if (!handler) {
-      console.error(`[ServiceWorker] Unknown tool: ${tool}`);
-      return sendResponse(id, false, null, `Unknown tool: ${tool}`);
+      return { id, success: false, error: `Unknown tool: ${tool}` };
     }
 
-    // Get tab ID - use provided or get active tab
     let targetTabId = tabId;
-    if (!targetTabId && tool !== 'wait' && tool !== 'get_tabs' && tool !== 'create_tab') {
+    const tabRequiredTools = ['navigate', 'reload', 'screenshot', 'read_page', 'get_html', 'get_text',
+      'click', 'type', 'fill', 'select', 'check', 'focus', 'blur', 'hover',
+      'press', 'keyboard', 'mouse', 'drag', 'scroll', 'scroll_to',
+      'wait_for', 'wait_for_navigation', 'execute_script', 'evaluate',
+      'get_storage', 'set_storage', 'clear_storage', 'get_url', 'get_title', 'get_viewport',
+      'find', 'find_all', 'find_by_text', 'get_element_info', 'get_bounding_box'];
+
+    if (!targetTabId && tabRequiredTools.includes(tool)) {
       const activeTab = await getActiveTab();
       if (!activeTab) {
-        console.error('[ServiceWorker] No active tab found');
-        return sendResponse(id, false, null, 'No active tab');
+        return { id, success: false, error: 'No active tab' };
       }
       targetTabId = activeTab.id;
     }
 
-    // Ensure content script is loaded for tools that need it
-    if (targetTabId && ['read_page', 'click', 'type', 'scroll'].includes(tool)) {
-      await ensureContentScriptLoaded(targetTabId);
-    }
-
-    console.log(`[ServiceWorker] Executing handler for ${tool} on tab ${targetTabId}`);
     const result = await handler(args, targetTabId);
-    console.log(`[ServiceWorker] Handler completed for ${tool}`);
-    return sendResponse(id, true, result, null);
-
+    return { id, success: true, result };
   } catch (e) {
-    console.error(`[ServiceWorker] Tool error:`, e);
-    return sendResponse(id, false, null, e.message);
+    console.error(`[BAT] Tool error (${tool}):`, e);
+    return { id, success: false, error: e.message };
   }
 }
 
-// Listen for messages from popup or content script
-chrome.runtime.onMessage.addListener((message, sender, sendResponseFn) => {
-  console.log('[ServiceWorker] ====== MESSAGE RECEIVED ======');
-  console.log('[ServiceWorker] Message:', message);
-  console.log('[ServiceWorker] Sender:', sender.tab ? { tabId: sender.tab.id, url: sender.tab.url } : 'extension');
-
-  if (message.source === 'popup' || message.source === 'external') {
-    console.log('[ServiceWorker] Processing as tool request...');
-    handleToolRequest(message).then(response => {
-      console.log('[ServiceWorker] Sending response back');
-      sendResponseFn(response);
-    });
-    return true; // Keep channel open for async response
-  } else {
-    console.log('[ServiceWorker] Unknown message source:', message.source);
-  }
-});
-
-// Log startup
-chrome.runtime.onStartup.addListener(() => {
-  console.log('[ServiceWorker] ====== EXTENSION STARTUP ======');
-});
-
-// Log install
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log('[ServiceWorker] ====== EXTENSION INSTALLED ======');
-  console.log('[ServiceWorker] Reason:', details.reason);
-});
-
-// External message listener
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  console.log('[ServiceWorker] ====== EXTERNAL MESSAGE ======');
-  console.log('[ServiceWorker] Message:', message);
-  console.log('[ServiceWorker] Sender:', sender);
-
-  handleToolRequest(message).then(response => {
-    sendResponse(response);
-  });
-  return true;
-});
-
-// ============ HTTP POLLING FOR REMOTE COMMANDS ============
-const COMMAND_SERVER_URL = 'http://127.0.0.1:8766';
-let pollingEnabled = true;
+// ============ HTTP POLLING ============
 
 async function pollForCommands() {
-  if (!pollingEnabled) return;
-
   try {
     const response = await fetch(`${COMMAND_SERVER_URL}/command`, {
       method: 'GET',
@@ -404,43 +761,35 @@ async function pollForCommands() {
 
     if (response.status === 200) {
       const command = await response.json();
-      console.log('[ServiceWorker] ====== RECEIVED REMOTE COMMAND ======');
-      console.log('[ServiceWorker] Command:', command);
+      console.log('[BAT] Command:', command.tool);
 
-      // Execute the command
-      const result = await handleToolRequest({
-        id: command.id || `remote_${Date.now()}`,
-        tool: command.tool,
-        args: command.args || {},
-        tabId: command.tabId,
-        source: 'remote'
-      });
+      const result = await handleToolRequest(command);
 
-      // Send result back to server
-      console.log('[ServiceWorker] Sending result back to server...');
       await fetch(`${COMMAND_SERVER_URL}/result`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(result)
       });
-      console.log('[ServiceWorker] Result sent');
     }
-    // 204 = no command pending, that's fine
   } catch (e) {
-    // Server not running or network error - silent fail
-    if (!e.message.includes('Failed to fetch')) {
-      console.log('[ServiceWorker] Poll error:', e.message);
-    }
+    // Server not running - silent
   }
 }
 
-// Poll every 100ms for faster response
 setInterval(pollForCommands, 100);
-console.log('[ServiceWorker] Polling enabled for', COMMAND_SERVER_URL, '(100ms interval)');
 
-// Keep alive ping (helps with debugging)
-setInterval(() => {
-  console.log('[ServiceWorker] Heartbeat -', new Date().toISOString());
-}, 30000);
+// ============ MESSAGE LISTENERS ============
 
-console.log('[ServiceWorker] ====== SERVICE WORKER READY ======');
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.source === 'popup' || message.source === 'external') {
+    handleToolRequest(message).then(sendResponse);
+    return true;
+  }
+});
+
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  handleToolRequest(message).then(sendResponse);
+  return true;
+});
+
+console.log('[BAT] Ready, polling', COMMAND_SERVER_URL);
