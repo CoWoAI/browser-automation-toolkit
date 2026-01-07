@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Task Executor",
+  "version": "1.0.0",
+  "description": "Execute browser automation tasks via native messaging",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "js": ["content/accessibility-tree.js"],
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Browser Task Executor"
+  },
+  "externally_connectable": {
+    "matches": ["http://localhost/*", "http://127.0.0.1/*", "https://localhost/*", "https://127.0.0.1/*"]
+  }
+}

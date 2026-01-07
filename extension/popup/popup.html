@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Browser Task Executor</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Browser Task Executor</h1>
+
+    <div class="section">
+      <label for="tool-select">Tool:</label>
+      <select id="tool-select">
+        <option value="inject_content_script">inject_content_script (run first!)</option>
+        <option value="read_page">read_page</option>
+        <option value="screenshot">screenshot</option>
+        <option value="click">click</option>
+        <option value="type">type</option>
+        <option value="navigate">navigate</option>
+        <option value="scroll">scroll</option>
+        <option value="execute_script">execute_script</option>
+        <option value="wait">wait</option>
+        <option value="get_tabs">get_tabs</option>
+        <option value="create_tab">create_tab</option>
+      </select>
+    </div>
+
+    <div class="section">
+      <label for="args-input">Arguments (JSON):</label>
+      <textarea id="args-input" rows="4" placeholder='{"filter": "interactive"}'>{}</textarea>
+    </div>
+
+    <div class="section">
+      <label for="tab-id">Tab ID (optional):</label>
+      <input type="number" id="tab-id" placeholder="Leave empty for active tab">
+    </div>
+
+    <div class="section">
+      <button id="execute-btn">Execute</button>
+      <button id="refresh-btn">Refresh Tab Info</button>
+    </div>
+
+    <div class="section">
+      <label>Current Tab:</label>
+      <div id="tab-info" class="info-box">Loading...</div>
+    </div>
+
+    <div class="section">
+      <label>Result:</label>
+      <div id="result" class="result-box">No result yet</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

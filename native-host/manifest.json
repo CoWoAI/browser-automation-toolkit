@@ -1,0 +1,9 @@
+{
+  "name": "com.anthropic.browser_task_executor",
+  "description": "Browser Task Executor Native Messaging Host",
+  "path": "/Users/orz/projects/ClaudeChromeRE/browser-task-executor/native-host/host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_HERE/"
+  ]
+}

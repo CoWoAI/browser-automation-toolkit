@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Browser Task Executor - Client</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; background: #f5f5f5; }
+    h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+    .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    label { display: block; font-weight: 600; margin-bottom: 5px; }
+    input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+    textarea { font-family: monospace; height: 120px; }
+    button { padding: 10px 20px; background: #4a90d9; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-top: 10px; }
+    button:hover { background: #357abd; }
+    button.secondary { background: #6c757d; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px; font-size: 13px; }
+    .success { color: #28a745; }
+    .error { color: #dc3545; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    #screenshot-preview { max-width: 100%; border: 1px solid #ccc; margin-top: 10px; display: none; }
+  </style>
+</head>
+<body>
+  <h1>Browser Task Executor - Client</h1>
+
+  <div class="card" style="background: #e8f5e9; border-left: 4px solid #4caf50;">
+    <strong>Server:</strong> <span id="serverStatus">Checking...</span>
+    <br><small>Command server must be running: <code>python3 command-server.py</code></small>
+  </div>
+
+  <div class="card">
+    <label>Tool:</label>
+    <select id="tool" onchange="updateArgs()">
+      <option value="get_tabs">get_tabs - List all tabs</option>
+      <option value="read_page">read_page - Get accessibility tree</option>
+      <option value="screenshot">screenshot - Capture viewport</option>
+      <option value="navigate">navigate - Go to URL</option>
+      <option value="click">click - Click element</option>
+      <option value="type">type - Type text</option>
+      <option value="scroll">scroll - Scroll page</option>
+      <option value="execute_script">execute_script - Run JavaScript</option>
+      <option value="create_tab">create_tab - Open new tab</option>
+    </select>
+
+    <label style="margin-top: 15px;">Arguments (JSON):</label>
+    <textarea id="args">{}</textarea>
+
+    <label style="margin-top: 15px;">Tab ID (optional):</label>
+    <input type="text" id="tabId" placeholder="Leave empty for active tab">
+
+    <div>
+      <button onclick="sendCommand()">Execute</button>
+      <button class="secondary" onclick="clearResult()">Clear</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Quick Actions:</label>
+    <div class="grid">
+      <button onclick="quickAction('get_tabs', {})">List Tabs</button>
+      <button onclick="quickAction('screenshot', {})">Screenshot</button>
+      <button onclick="quickAction('read_page', {filter: 'interactive'})">Read Page (Interactive)</button>
+      <button onclick="quickAction('navigate', {url: 'https://example.com'})">Go to Example.com</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Result:</label>
+    <pre id="result">Click "Execute" or a quick action to see results</pre>
+    <img id="screenshot-preview" src="">
+  </div>
+
+  <script>
+    const defaultArgs = {
+      get_tabs: {},
+      read_page: { filter: "interactive", depth: 10 },
+      screenshot: {},
+      navigate: { url: "https://example.com" },
+      click: { ref: "ref_1" },
+      type: { text: "Hello World", ref: "ref_1" },
+      scroll: { direction: "down", amount: 300 },
+      execute_script: { code: "document.title" },
+      create_tab: { url: "https://example.com" }
+    };
+
+    function updateArgs() {
+      const tool = document.getElementById('tool').value;
+      document.getElementById('args').value = JSON.stringify(defaultArgs[tool] || {}, null, 2);
+    }
+
+    function clearResult() {
+      document.getElementById('result').textContent = 'Cleared';
+      document.getElementById('screenshot-preview').style.display = 'none';
+    }
+
+    function quickAction(tool, args) {
+      document.getElementById('tool').value = tool;
+      document.getElementById('args').value = JSON.stringify(args, null, 2);
+      sendCommand();
+    }
+
+    const COMMAND_SERVER = 'http://127.0.0.1:8766';
+
+    async function sendCommand() {
+      const tool = document.getElementById('tool').value;
+      const tabId = document.getElementById('tabId').value;
+
+      let args;
+      try {
+        args = JSON.parse(document.getElementById('args').value);
+      } catch (e) {
+        document.getElementById('result').innerHTML = '<span class="error">Invalid JSON: ' + e.message + '</span>';
+        return;
+      }
+
+      const command = { tool, args };
+      if (tabId) command.tabId = parseInt(tabId);
+
+      document.getElementById('result').textContent = 'Sending command to server...';
+      document.getElementById('screenshot-preview').style.display = 'none';
+
+      try {
+        console.log('[Client] Sending command via HTTP:', command);
+        const response = await fetch(`${COMMAND_SERVER}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(command)
+        });
+
+        const result = await response.json();
+        console.log('[Client] Received result:', result);
+        showResult(result, tool);
+      } catch (e) {
+        console.error('[Client] Error:', e);
+        showResult({ error: `Server error: ${e.message}. Is command-server.py running?` }, tool);
+      }
+    }
+
+    function showResult(response, tool) {
+      if (tool === 'screenshot' && response?.result?.image) {
+        document.getElementById('screenshot-preview').src = response.result.image;
+        document.getElementById('screenshot-preview').style.display = 'block';
+        const displayResult = { ...response };
+        displayResult.result = { ...response.result, image: '[base64 image - shown below]' };
+        document.getElementById('result').innerHTML = '<span class="success">Success!</span>\n' + JSON.stringify(displayResult, null, 2);
+      } else if (response?.error) {
+        document.getElementById('result').innerHTML = '<span class="error">Error: ' + response.error + '</span>';
+      } else {
+        const status = response?.success ? '<span class="success">Success!</span>' : '<span class="error">Failed</span>';
+        document.getElementById('result').innerHTML = status + '\n' + JSON.stringify(response, null, 2);
+      }
+    }
+
+    // Check server status
+    async function checkServerStatus() {
+      const statusEl = document.getElementById('serverStatus');
+      try {
+        const response = await fetch(`${COMMAND_SERVER}/`, { method: 'GET' });
+        if (response.ok) {
+          statusEl.innerHTML = '<span style="color: green;">✓ Connected</span>';
+        } else {
+          statusEl.innerHTML = '<span style="color: red;">✗ Server error</span>';
+        }
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color: red;">✗ Not running</span>';
+      }
+    }
+
+    // Initialize
+    updateArgs();
+    checkServerStatus();
+    setInterval(checkServerStatus, 5000);
+  </script>
+</body>
+</html>
