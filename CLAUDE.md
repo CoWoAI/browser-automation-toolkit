@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Browser Automation Toolkit v2.0.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
 
 ```
-Your App → POST /command → server.js (8766) → Extension polls (100ms) → Chrome → Result
+Your App → POST /command → server.js (8766) → Extension polls (configurable) → Chrome → Result
 ```
 
 ## Commands
@@ -24,9 +24,6 @@ cd client && python3 server.py   # Port 8080
 
 # Load extension
 # chrome://extensions → Developer mode → Load unpacked → extension/
-
-# Load cookie exporter (optional)
-# chrome://extensions → Developer mode → Load unpacked → cookie-exporter/
 ```
 
 ## Project Structure
@@ -39,28 +36,50 @@ browser-automation-toolkit/
 │   └── server.test.js        # Comprehensive server tests
 ├── extension/
 │   ├── manifest.json         # Manifest V3, broad permissions
-│   ├── service-worker.js     # Tool handlers + HTTP polling
+│   ├── service-worker.js     # Tool handlers + HTTP polling + settings
 │   ├── content/
 │   │   └── accessibility-tree.js  # DOM interaction + ref system
-│   └── popup/                # Extension popup UI
-├── cookie-exporter/          # Standalone cookie export extension
-│   ├── manifest.json
-│   ├── popup/
-│   │   ├── popup.html
-│   │   └── popup.js
-│   └── README.md
+│   └── popup/                # Extension popup UI (tabbed)
+│       ├── popup.html        # Tabs: Cookies, Tools, Settings
+│       ├── popup.css         # Styles
+│       └── popup.js          # Cookie manager + tool executor + settings
 └── client/
-    ├── index.html            # Test UI
+    ├── index.html            # Web UI for sending commands
     └── server.py             # Simple HTTP server for UI
 ```
 
+## Extension Popup UI
+
+The extension popup has three tabs:
+
+### Cookies Tab
+- **Export**: Export cookies (all or by domain) to JSON or Netscape format
+- **Import**: Import cookies from JSON/Netscape file with `__Host-` cookie support
+- **Manage**: View domain cookies, clear domain cookies, clear ALL cookies
+
+### Tools Tab
+- Execute tools directly from the popup
+- Supports common tools: read_page, screenshot, click, navigate, etc.
+
+### Settings Tab
+- **Browser Control**: Enable/disable HTTP polling (for multi-browser setups)
+- **Server URL**: Configure command server URL (default: http://127.0.0.1:8766)
+- **Poll Interval**: Configure polling interval in ms (default: 100)
+
+## Multi-Browser Setup
+
+For transferring sessions between browsers:
+- **Browser A** (control): Enable "Browser Control" in Settings
+- **Browser B** (cookies only): Disable "Browser Control", use only Cookies tab
+
 ## Key Implementation Details
 
-- **Polling interval**: 100ms (configurable in service-worker.js)
+- **Polling interval**: Configurable via Settings (default 100ms)
 - **Command timeout**: 30 seconds (configurable in server.js)
 - **Element refs**: WeakRef-based (`ref_1`, `ref_2`, etc.) to avoid memory leaks
 - **Network capture**: Max 1000 requests stored in memory
-- **Permissions**: `scripting`, `tabs`, `cookies`, `storage`, `downloads`, `debugger`, `webNavigation`, `webRequest`
+- **Permissions**: `scripting`, `tabs`, `cookies`, `storage`, `downloads`, `debugger`, `webNavigation`, `webRequest`, `declarativeNetRequest`, `browsingData`
+- **Cookie prefixes**: Special handling for `__Host-` and `__Secure-` cookies
 
 ## Adding New Tools
 
@@ -140,6 +159,11 @@ curl -X POST http://127.0.0.1:8766/command \
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "screenshot", "tabId": 123}'
+
+# Import cookies
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "import_cookies", "args": {"cookies": [...]}}'
 ```
 
 ## Testing
@@ -165,3 +189,4 @@ Tests cover:
 - Session exports contain sensitive data (cookies, localStorage)
 - Not recommended for production without additional security
 - No authentication on HTTP API
+- Browser Control can be disabled per-browser via Settings
