@@ -647,8 +647,14 @@ const tools = {
     return { success: true, cookies };
   },
 
-  async set_cookie({ cookie }, tabId) {
+  async set_cookie(args, tabId) {
     try {
+      // Handle both {cookie: {...}} and direct cookie object
+      const cookie = args.cookie || args;
+      if (!cookie || !cookie.name) {
+        return { success: false, error: 'Cookie must have at least a "name" field. Pass as {cookie: {name, value, domain, ...}}' };
+      }
+
       // Build URL from domain if not provided
       let url = cookie.url;
       if (!url && cookie.domain) {
