@@ -59,6 +59,18 @@
     <div>
       <button onclick="sendCommand()">Execute</button>
       <button class="secondary" onclick="clearResult()">Clear</button>
+      <button class="secondary" onclick="document.getElementById('fileInput').click()">Load JSON File</button>
+      <input type="file" id="fileInput" accept=".json,.txt" style="display:none" onchange="loadJsonFile(event)">
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Cookie Tools:</label>
+    <div class="grid">
+      <button class="small" onclick="loadCookiesForImport()">Import Cookies from File</button>
+      <button class="small" onclick="quickAction('export_cookies', {format: 'json'})">Export All Cookies</button>
+      <button class="small" onclick="quickAction('save_session', {})">Save Session</button>
+      <button class="small" onclick="loadSessionForRestore()">Restore Session from File</button>
     </div>
   </div>
 
@@ -267,6 +279,74 @@
     function clearResult() {
       document.getElementById('result').textContent = 'Cleared';
       document.getElementById('screenshot-preview').style.display = 'none';
+    }
+
+    // Load JSON file into args textarea
+    async function loadJsonFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        document.getElementById('args').value = JSON.stringify(parsed, null, 2);
+        document.getElementById('result').innerHTML = '<span class="success">Loaded: ' + file.name + '</span>';
+      } catch (e) {
+        document.getElementById('result').innerHTML = '<span class="error">Failed to parse JSON: ' + e.message + '</span>';
+      }
+      event.target.value = ''; // Reset for next load
+    }
+
+    // Load cookies file and set up import_cookies tool
+    function loadCookiesForImport() {
+      document.getElementById('tool').value = 'import_cookies';
+      updateArgs();
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,.txt';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const cookies = JSON.parse(text);
+          // Handle both direct array and {cookies: [...]} format
+          const cookieArray = Array.isArray(cookies) ? cookies : (cookies.cookies || cookies.result?.cookies || []);
+          document.getElementById('args').value = JSON.stringify({ cookies: cookieArray, format: 'json' }, null, 2);
+          document.getElementById('result').innerHTML = '<span class="success">Loaded ' + cookieArray.length + ' cookies from ' + file.name + '. Click Execute to import.</span>';
+        } catch (e) {
+          document.getElementById('result').innerHTML = '<span class="error">Failed to parse cookies: ' + e.message + '</span>';
+        }
+      };
+      input.click();
+    }
+
+    // Load session file and set up restore_session tool
+    function loadSessionForRestore() {
+      document.getElementById('tool').value = 'restore_session';
+      updateArgs();
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+          // Handle both direct session and {result: {session: ...}} format
+          const session = data.session || data.result?.session || data;
+          document.getElementById('args').value = JSON.stringify({ session }, null, 2);
+          document.getElementById('result').innerHTML = '<span class="success">Loaded session from ' + file.name + '. Click Execute to restore.</span>';
+        } catch (e) {
+          document.getElementById('result').innerHTML = '<span class="error">Failed to parse session: ' + e.message + '</span>';
+        }
+      };
+      input.click();
     }
 
     function quickAction(tool, args) {
