@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Browser Automation Toolkit - Client</title>
   <style>
     * { box-sizing: border-box; }
@@ -334,12 +335,12 @@
         const response = await fetch(`${COMMAND_SERVER}/`, { method: 'GET' });
         if (response.ok) {
           const data = await response.json();
-          statusEl.innerHTML = `<span style="color: green;">✓ Connected (v${data.version || '?'})</span>`;
+          statusEl.innerHTML = '<span style="color: green;">&#10004; Connected (v' + (data.version || '?') + ')</span>';
         } else {
-          statusEl.innerHTML = '<span style="color: red;">✗ Server error</span>';
+          statusEl.innerHTML = '<span style="color: red;">&#10008; Server error</span>';
         }
       } catch (e) {
-        statusEl.innerHTML = '<span style="color: red;">✗ Not running</span>';
+        statusEl.innerHTML = '<span style="color: red;">&#10008; Not running</span>';
       }
     }
 
