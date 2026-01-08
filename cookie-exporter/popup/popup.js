@@ -81,7 +81,13 @@ $('#export-btn').addEventListener('click', async () => {
     if (format === 'netscape') {
       output = toNetscapeFormat(cookies);
     } else {
-      output = JSON.stringify(cookies, null, 2);
+      // Add URL field to each cookie for easy import
+      const enrichedCookies = cookies.map(cookie => {
+        const cookieDomain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+        const url = `http${cookie.secure ? 's' : ''}://${cookieDomain}${cookie.path || '/'}`;
+        return { ...cookie, url };
+      });
+      output = JSON.stringify(enrichedCookies, null, 2);
     }
 
     $('#export-output').value = output;
@@ -148,10 +154,8 @@ $('#import-btn').addEventListener('click', async () => {
       $('#import-url').value = targetUrl;
     }
 
-    if (!targetUrl) {
-      showStatus('Target URL required', 'error');
-      return;
-    }
+    // Target URL is now optional if cookies have their own URLs
+    // (exported cookies now include URL field)
 
     const format = $('#import-format').value;
     let cookies;
@@ -167,19 +171,48 @@ $('#import-btn').addEventListener('click', async () => {
 
     for (const cookie of cookies) {
       try {
+        // Use cookie's URL if available, otherwise build from domain, or fall back to target URL
+        let url = cookie.url;
+        if (!url && cookie.domain) {
+          const cookieDomain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+          url = `http${cookie.secure ? 's' : ''}://${cookieDomain}${cookie.path || '/'}`;
+        }
+        if (!url) url = targetUrl;
+
+        // Skip if no URL available
+        if (!url) {
+          console.warn('Skipping cookie without URL:', cookie.name);
+          failed++;
+          continue;
+        }
+
+        // Normalize sameSite - use 'lax' as default for unspecified
+        let sameSite = cookie.sameSite || 'lax';
+        if (sameSite === 'unspecified') sameSite = 'lax';
+
         const cookieData = {
-          url: targetUrl,
+          url,
           name: cookie.name,
           value: cookie.value,
           path: cookie.path || '/',
-          secure: cookie.secure,
-          httpOnly: cookie.httpOnly,
-          sameSite: cookie.sameSite || 'lax'
+          secure: cookie.secure || false,
+          httpOnly: cookie.httpOnly || false,
+          sameSite
         };
 
-        // Only set domain if it matches target
-        if (cookie.domain) {
-          cookieData.domain = cookie.domain.startsWith('.') ? cookie.domain : cookie.domain;
+        // __Host- cookies must NOT have domain set, must have secure=true and path='/'
+        // __Secure- cookies must have secure=true
+        if (cookie.name.startsWith('__Host-')) {
+          cookieData.secure = true;
+          cookieData.path = '/';
+          // Do NOT set domain for __Host- cookies
+        } else if (cookie.name.startsWith('__Secure-')) {
+          cookieData.secure = true;
+          if (cookie.domain) {
+            cookieData.domain = cookie.domain;
+          }
+        } else if (cookie.domain) {
+          cookieData.domain = cookie.domain;
         }
 
         if (cookie.expirationDate) {
@@ -252,6 +285,37 @@ $('#clear-domain-btn').addEventListener('click', async () => {
   }
 });
 
+// Clear ALL cookies
+$('#clear-all-btn').addEventListener('click', async () => {
+  try {
+    if (!confirm('Are you sure you want to clear ALL cookies from ALL websites? This will log you out of everything.')) {
+      return;
+    }
+
+    const cookies = await chrome.cookies.getAll({});
+
+    if (cookies.length === 0) {
+      showStatus('No cookies to clear');
+      return;
+    }
+
+    let cleared = 0;
+    for (const cookie of cookies) {
+      const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain}${cookie.path}`;
+      try {
+        await chrome.cookies.remove({ url, name: cookie.name });
+        cleared++;
+      } catch (e) {
+        console.warn('Failed to remove cookie:', cookie.name, e);
+      }
+    }
+
+    showStatus(`Cleared ${cleared} cookies from all websites`);
+  } catch (e) {
+    showStatus(`Error: ${e.message}`, 'error');
+  }
+});
+
 // View all cookies
 $('#view-cookies-btn').addEventListener('click', async () => {
   try {
@@ -259,8 +323,15 @@ $('#view-cookies-btn').addEventListener('click', async () => {
     const domain = getDomainFromUrl(tab.url);
     const cookies = await chrome.cookies.getAll({ domain });
 
+    // Add URL field to each cookie for easy import
+    const enrichedCookies = cookies.map(cookie => {
+      const cookieDomain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+      const url = `http${cookie.secure ? 's' : ''}://${cookieDomain}${cookie.path || '/'}`;
+      return { ...cookie, url };
+    });
+
     $('#export-domain').value = domain;
-    $('#export-output').value = JSON.stringify(cookies, null, 2);
+    $('#export-output').value = JSON.stringify(enrichedCookies, null, 2);
     $('#export-count').textContent = `${cookies.length} cookie(s) for ${domain}`;
 
     // Switch to export tab

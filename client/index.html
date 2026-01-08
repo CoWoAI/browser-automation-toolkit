@@ -297,11 +297,8 @@
       event.target.value = ''; // Reset for next load
     }
 
-    // Load cookies file and set up import_cookies tool
+    // Load cookies file and import them
     function loadCookiesForImport() {
-      document.getElementById('tool').value = 'import_cookies';
-      updateArgs();
-
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.json,.txt';
@@ -312,10 +309,34 @@
         try {
           const text = await file.text();
           const cookies = JSON.parse(text);
-          // Handle both direct array and {cookies: [...]} format
+          // Handle various formats: array, {cookies: [...]}, {result: {cookies: [...]}}
           const cookieArray = Array.isArray(cookies) ? cookies : (cookies.cookies || cookies.result?.cookies || []);
-          document.getElementById('args').value = JSON.stringify({ cookies: cookieArray, format: 'json' }, null, 2);
-          document.getElementById('result').innerHTML = '<span class="success">Loaded ' + cookieArray.length + ' cookies from ' + file.name + '. Click Execute to import.</span>';
+
+          if (cookieArray.length === 0) {
+            document.getElementById('result').innerHTML = '<span class="error">No cookies found in file</span>';
+            return;
+          }
+
+          // Set tool and args
+          document.getElementById('tool').value = 'import_cookies';
+          const args = { cookies: cookieArray, format: 'json' };
+          document.getElementById('args').value = JSON.stringify(args, null, 2);
+
+          // Show loading state
+          document.getElementById('result').innerHTML = '<span class="loading">Importing ' + cookieArray.length + ' cookies...</span>';
+
+          // Auto-execute the import
+          try {
+            const response = await fetch(`${COMMAND_SERVER}/command`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tool: 'import_cookies', args })
+            });
+            const result = await response.json();
+            showResult(result, 'import_cookies');
+          } catch (err) {
+            showResult({ error: `Server error: ${err.message}` }, 'import_cookies');
+          }
         } catch (e) {
           document.getElementById('result').innerHTML = '<span class="error">Failed to parse cookies: ' + e.message + '</span>';
         }

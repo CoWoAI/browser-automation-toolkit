@@ -2,17 +2,107 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Browser Task Executor</title>
+  <title>Browser Automation Toolkit</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
-    <h1>Browser Task Executor</h1>
+  <div class="header">
+    <h1>Browser Automation Toolkit</h1>
+    <div class="status" id="status-indicator">
+      <span class="status-dot"></span>
+      <span id="status-text">Checking...</span>
+    </div>
+  </div>
 
-    <div class="section">
-      <label for="tool-select">Tool:</label>
+  <div class="tabs">
+    <div class="tab active" data-tab="cookies">Cookies</div>
+    <div class="tab" data-tab="tools">Tools</div>
+    <div class="tab" data-tab="settings">Settings</div>
+  </div>
+
+  <!-- Cookies Tab -->
+  <div id="cookies-tab" class="tab-content active">
+    <div class="sub-tabs">
+      <div class="sub-tab active" data-subtab="export">Export</div>
+      <div class="sub-tab" data-subtab="import">Import</div>
+      <div class="sub-tab" data-subtab="manage">Manage</div>
+    </div>
+
+    <!-- Export Sub-tab -->
+    <div id="export-subtab" class="subtab-content active">
+      <div class="form-group">
+        <label>Domain (empty = all cookies)</label>
+        <input type="text" id="export-domain" placeholder="example.com">
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="export-format">
+          <option value="json">JSON</option>
+          <option value="netscape">Netscape (curl)</option>
+        </select>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="current-domain-only">
+        <label for="current-domain-only">Current tab domain only</label>
+      </div>
+      <div class="btn-row">
+        <button class="btn-primary" id="export-btn">Export</button>
+        <button class="btn-secondary" id="copy-btn">Copy</button>
+        <button class="btn-secondary" id="download-btn">Download</button>
+      </div>
+      <div class="cookie-count" id="export-count"></div>
+      <textarea id="export-output" readonly placeholder="Exported cookies will appear here..."></textarea>
+    </div>
+
+    <!-- Import Sub-tab -->
+    <div id="import-subtab" class="subtab-content">
+      <div class="form-group">
+        <label>Format</label>
+        <select id="import-format">
+          <option value="json">JSON</option>
+          <option value="netscape">Netscape</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Cookies</label>
+        <textarea id="import-input" placeholder="Paste JSON or Netscape cookies here..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Fallback URL (optional)</label>
+        <input type="text" id="import-url" placeholder="https://example.com">
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="use-current-url">
+        <label for="use-current-url">Use current tab URL as fallback</label>
+      </div>
+      <div class="btn-row">
+        <button class="btn-primary" id="import-btn">Import</button>
+        <button class="btn-secondary" id="load-file-btn">Load File</button>
+      </div>
+    </div>
+
+    <!-- Manage Sub-tab -->
+    <div id="manage-subtab" class="subtab-content">
+      <div class="form-group">
+        <label>Quick Actions</label>
+        <div class="btn-row">
+          <button class="btn-secondary" id="view-cookies-btn">View Domain Cookies</button>
+        </div>
+        <div class="btn-row" style="margin-top: 8px;">
+          <button class="btn-danger" id="clear-domain-btn">Clear Domain Cookies</button>
+        </div>
+        <div class="btn-row" style="margin-top: 8px;">
+          <button class="btn-danger" id="clear-all-btn">Clear ALL Cookies</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tools Tab -->
+  <div id="tools-tab" class="tab-content">
+    <div class="form-group">
+      <label>Tool</label>
       <select id="tool-select">
-        <option value="inject_content_script">inject_content_script (run first!)</option>
         <option value="read_page">read_page</option>
         <option value="screenshot">screenshot</option>
         <option value="click">click</option>
@@ -23,34 +113,64 @@
         <option value="wait">wait</option>
         <option value="get_tabs">get_tabs</option>
         <option value="create_tab">create_tab</option>
+        <option value="save_session">save_session</option>
+        <option value="restore_session">restore_session</option>
       </select>
     </div>
-
-    <div class="section">
-      <label for="args-input">Arguments (JSON):</label>
-      <textarea id="args-input" rows="4" placeholder='{"filter": "interactive"}'>{}</textarea>
+    <div class="form-group">
+      <label>Arguments (JSON)</label>
+      <textarea id="args-input" rows="4">{}</textarea>
     </div>
-
-    <div class="section">
-      <label for="tab-id">Tab ID (optional):</label>
+    <div class="form-group">
+      <label>Tab ID (optional)</label>
       <input type="number" id="tab-id" placeholder="Leave empty for active tab">
     </div>
-
-    <div class="section">
-      <button id="execute-btn">Execute</button>
-      <button id="refresh-btn">Refresh Tab Info</button>
+    <div class="btn-row">
+      <button class="btn-primary" id="execute-btn">Execute</button>
+      <button class="btn-secondary" id="refresh-btn">Refresh Tab</button>
     </div>
-
-    <div class="section">
-      <label>Current Tab:</label>
-      <div id="tab-info" class="info-box">Loading...</div>
+    <div class="form-group">
+      <label>Current Tab</label>
+      <div class="info-box" id="tab-info">Loading...</div>
     </div>
-
-    <div class="section">
-      <label>Result:</label>
-      <div id="result" class="result-box">No result yet</div>
+    <div class="form-group">
+      <label>Result</label>
+      <div class="result-box" id="result">No result yet</div>
     </div>
   </div>
+
+  <!-- Settings Tab -->
+  <div id="settings-tab" class="tab-content">
+    <div class="settings-section">
+      <h3>Browser Control</h3>
+      <p class="help-text">Enable HTTP polling to allow external control via localhost:8766</p>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="enable-polling">
+          <span class="toggle-slider"></span>
+        </label>
+        <span>Enable Browser Control</span>
+      </div>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Server URL</label>
+        <input type="text" id="server-url" placeholder="http://127.0.0.1:8766">
+      </div>
+      <div class="form-group">
+        <label>Poll Interval (ms)</label>
+        <input type="number" id="poll-interval" value="100" min="50" max="5000">
+      </div>
+      <button class="btn-primary" id="save-settings-btn">Save Settings</button>
+    </div>
+
+    <div class="settings-section">
+      <h3>About</h3>
+      <p class="help-text">Browser Automation Toolkit v2.0.0</p>
+      <p class="help-text">Control Chrome via HTTP API or use the built-in cookie manager.</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <input type="file" id="file-input" style="display: none;" accept=".json,.txt">
 
   <script src="popup.js"></script>
 </body>

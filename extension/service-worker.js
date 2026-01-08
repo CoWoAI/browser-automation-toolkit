@@ -1,9 +1,22 @@
 // Browser Automation Toolkit - Service Worker v2.0
 // Comprehensive browser automation via HTTP polling
 
-const COMMAND_SERVER_URL = 'http://127.0.0.1:8766';
+// Default settings (can be overridden via popup settings)
+let settings = {
+  pollingEnabled: true,
+  serverUrl: 'http://127.0.0.1:8766',
+  pollInterval: 100
+};
 
 console.log('[BAT] Service worker v2.0 starting...');
+
+// Load settings from storage
+chrome.storage.local.get(['pollingEnabled', 'serverUrl', 'pollInterval']).then(stored => {
+  if (stored.pollingEnabled !== undefined) settings.pollingEnabled = stored.pollingEnabled;
+  if (stored.serverUrl) settings.serverUrl = stored.serverUrl;
+  if (stored.pollInterval) settings.pollInterval = stored.pollInterval;
+  console.log('[BAT] Settings loaded:', settings);
+});
 
 // ============ STATE ============
 const state = {
@@ -567,7 +580,17 @@ const tools = {
     // Restore cookies
     for (const cookie of session.cookies || []) {
       try {
-        const cookieData = { url: session.url, name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path || '/', secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite };
+        const cookieData = { url: session.url, name: cookie.name, value: cookie.value, path: cookie.path || '/', secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite };
+        // __Host- cookies must NOT have domain set
+        if (cookie.name.startsWith('__Host-')) {
+          cookieData.secure = true;
+          cookieData.path = '/';
+        } else if (cookie.name.startsWith('__Secure-')) {
+          cookieData.secure = true;
+          if (cookie.domain) cookieData.domain = cookie.domain;
+        } else if (cookie.domain) {
+          cookieData.domain = cookie.domain;
+        }
         if (cookie.expirationDate) cookieData.expirationDate = cookie.expirationDate;
         await chrome.cookies.set(cookieData);
       } catch (e) { console.warn('[BAT] Failed to set cookie:', cookie.name, e); }
@@ -589,9 +612,28 @@ const tools = {
       } catch (e) { /* ignore */ }
     }
 
-    const parsedCookies = format === 'netscape' ? parseNetscapeCookies(cookies) : (typeof cookies === 'string' ? JSON.parse(cookies) : cookies);
+    // Parse cookies - handle various input formats
+    let parsedCookies;
+    if (format === 'netscape') {
+      parsedCookies = parseNetscapeCookies(cookies);
+    } else if (typeof cookies === 'string') {
+      const parsed = JSON.parse(cookies);
+      // Handle wrapper objects like { success: true, cookies: [...] }
+      parsedCookies = Array.isArray(parsed) ? parsed : (parsed.cookies || [parsed]);
+    } else if (Array.isArray(cookies)) {
+      parsedCookies = cookies;
+    } else if (cookies && cookies.cookies) {
+      // Handle wrapper object
+      parsedCookies = cookies.cookies;
+    } else if (cookies) {
+      // Single cookie object
+      parsedCookies = [cookies];
+    } else {
+      return { success: false, error: 'No cookies provided' };
+    }
     let imported = 0;
     let failed = 0;
+    const errors = [];
 
     for (const cookie of parsedCookies) {
       try {
@@ -605,12 +647,12 @@ const tools = {
 
         if (!url) {
           failed++;
+          errors.push({ name: cookie.name, error: 'No URL available' });
           continue;
         }
 
-        // Map sameSite values (Chrome returns "no_restriction" but expects "none")
+        // Normalize sameSite - use 'lax' as default for unspecified
         let sameSite = cookie.sameSite || 'lax';
-        if (sameSite === 'no_restriction') sameSite = 'none';
         if (sameSite === 'unspecified') sameSite = 'lax';
 
         const cookieData = {
@@ -623,24 +665,52 @@ const tools = {
           sameSite
         };
 
-        if (cookie.domain) cookieData.domain = cookie.domain;
+        // __Host- cookies must NOT have domain set, must have secure=true and path='/'
+        // __Secure- cookies must have secure=true
+        if (cookie.name.startsWith('__Host-')) {
+          cookieData.secure = true;
+          cookieData.path = '/';
+          // Do NOT set domain for __Host- cookies
+        } else if (cookie.name.startsWith('__Secure-')) {
+          cookieData.secure = true;
+          if (cookie.domain) cookieData.domain = cookie.domain;
+        } else if (cookie.domain) {
+          cookieData.domain = cookie.domain;
+        }
         if (cookie.expirationDate) cookieData.expirationDate = cookie.expirationDate;
 
         await chrome.cookies.set(cookieData);
         imported++;
       } catch (e) {
         console.warn('[BAT] Failed to import cookie:', cookie.name, e.message);
+        errors.push({ name: cookie.name, error: e.message });
         failed++;
       }
     }
-    return { success: true, imported, failed, total: parsedCookies.length };
+    // Debug: show sample of what we received
+    const debug = {
+      receivedType: typeof cookies,
+      isArray: Array.isArray(cookies),
+      hasCookiesProp: !!(cookies && cookies.cookies),
+      parsedCount: parsedCookies?.length || 0,
+      sampleCookie: parsedCookies?.[0] ? { name: parsedCookies[0].name, hasUrl: !!parsedCookies[0].url, hasDomain: !!parsedCookies[0].domain } : null
+    };
+    return { success: true, imported, failed, total: parsedCookies.length, errors: errors.slice(0, 10), debug };
   },
 
   async export_cookies({ format = 'json', domain }, tabId) {
     const query = domain ? { domain } : {};
     const cookies = await chrome.cookies.getAll(query);
+
+    // Add URL field to each cookie for easy import
+    const enrichedCookies = cookies.map(cookie => {
+      const cookieDomain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+      const url = `http${cookie.secure ? 's' : ''}://${cookieDomain}${cookie.path || '/'}`;
+      return { ...cookie, url };
+    });
+
     if (format === 'netscape') return { success: true, cookies: toNetscapeFormat(cookies), count: cookies.length };
-    return { success: true, cookies, count: cookies.length };
+    return { success: true, cookies: enrichedCookies, count: enrichedCookies.length };
   },
 
   // ============ COOKIES ============
@@ -686,9 +756,8 @@ const tools = {
         url = tab.url;
       }
 
-      // Map sameSite values (Chrome returns "no_restriction" but expects "none")
+      // Normalize sameSite - use 'lax' as default for unspecified
       let sameSite = cookie.sameSite || 'lax';
-      if (sameSite === 'no_restriction') sameSite = 'none';
       if (sameSite === 'unspecified') sameSite = 'lax';
 
       const cookieData = {
@@ -701,8 +770,16 @@ const tools = {
         sameSite
       };
 
-      // Only set domain if provided (let Chrome infer from URL otherwise)
-      if (cookie.domain) {
+      // __Host- cookies must NOT have domain set, must have secure=true and path='/'
+      // __Secure- cookies must have secure=true
+      if (cookie.name.startsWith('__Host-')) {
+        cookieData.secure = true;
+        cookieData.path = '/';
+        // Do NOT set domain for __Host- cookies
+      } else if (cookie.name.startsWith('__Secure-')) {
+        cookieData.secure = true;
+        if (cookie.domain) cookieData.domain = cookie.domain;
+      } else if (cookie.domain) {
         cookieData.domain = cookie.domain;
       }
 
@@ -1229,18 +1306,33 @@ async function handleToolRequest(message) {
 // ============ HTTP POLLING ============
 
 async function pollForCommands() {
+  // Skip if polling is disabled
+  if (!settings.pollingEnabled) return;
+
   try {
-    const response = await fetch(`${COMMAND_SERVER_URL}/command`, { method: 'GET', headers: { 'Accept': 'application/json' } });
+    const response = await fetch(`${settings.serverUrl}/command`, { method: 'GET', headers: { 'Accept': 'application/json' } });
     if (response.status === 200) {
       const command = await response.json();
       console.log('[BAT] Command:', command.tool);
       const result = await handleToolRequest(command);
-      await fetch(`${COMMAND_SERVER_URL}/result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) });
+      await fetch(`${settings.serverUrl}/result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) });
     }
   } catch (e) { /* Server not running */ }
 }
 
-setInterval(pollForCommands, 100);
+// Start polling with dynamic interval
+let pollIntervalId = setInterval(pollForCommands, settings.pollInterval);
+
+// Function to restart polling with new interval
+function restartPolling() {
+  clearInterval(pollIntervalId);
+  if (settings.pollingEnabled) {
+    pollIntervalId = setInterval(pollForCommands, settings.pollInterval);
+    console.log('[BAT] Polling started with interval:', settings.pollInterval);
+  } else {
+    console.log('[BAT] Polling disabled');
+  }
+}
 
 // ============ EVENT LISTENERS ============
 
@@ -1254,11 +1346,24 @@ chrome.webRequest.onCompleted.addListener((details) => {
 
 // Message listeners
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.source === 'popup' || message.source === 'external') { handleToolRequest(message).then(sendResponse); return true; }
+  // Handle settings changes from popup
+  if (message.type === 'settingsChanged') {
+    settings = { ...settings, ...message.settings };
+    restartPolling();
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Handle tool requests from popup
+  if (message.source === 'popup' || message.source === 'external') {
+    handleToolRequest(message).then(sendResponse);
+    return true;
+  }
 });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  handleToolRequest(message).then(sendResponse); return true;
+  handleToolRequest(message).then(sendResponse);
+  return true;
 });
 
-console.log('[BAT] Service worker v2.0 ready, polling', COMMAND_SERVER_URL);
+console.log('[BAT] Service worker v2.0 ready');
