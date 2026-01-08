@@ -608,6 +608,11 @@ const tools = {
           continue;
         }
 
+        // Map sameSite values (Chrome returns "no_restriction" but expects "none")
+        let sameSite = cookie.sameSite || 'lax';
+        if (sameSite === 'no_restriction') sameSite = 'none';
+        if (sameSite === 'unspecified') sameSite = 'lax';
+
         const cookieData = {
           url,
           name: cookie.name,
@@ -615,7 +620,7 @@ const tools = {
           path: cookie.path || '/',
           secure: cookie.secure || false,
           httpOnly: cookie.httpOnly || false,
-          sameSite: cookie.sameSite || 'lax'
+          sameSite
         };
 
         if (cookie.domain) cookieData.domain = cookie.domain;
@@ -681,6 +686,11 @@ const tools = {
         url = tab.url;
       }
 
+      // Map sameSite values (Chrome returns "no_restriction" but expects "none")
+      let sameSite = cookie.sameSite || 'lax';
+      if (sameSite === 'no_restriction') sameSite = 'none';
+      if (sameSite === 'unspecified') sameSite = 'lax';
+
       const cookieData = {
         url,
         name: cookie.name,
@@ -688,7 +698,7 @@ const tools = {
         path: cookie.path || '/',
         secure: cookie.secure || false,
         httpOnly: cookie.httpOnly || false,
-        sameSite: cookie.sameSite || 'lax'
+        sameSite
       };
 
       // Only set domain if provided (let Chrome infer from URL otherwise)
