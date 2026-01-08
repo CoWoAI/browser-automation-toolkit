@@ -649,10 +649,25 @@ const tools = {
 
   async set_cookie(args, tabId) {
     try {
-      // Handle both {cookie: {...}} and direct cookie object
-      const cookie = args.cookie || args;
-      if (!cookie || !cookie.name) {
-        return { success: false, error: 'Cookie must have at least a "name" field. Pass as {cookie: {name, value, domain, ...}}' };
+      // Handle various formats:
+      // - {cookie: {...}}
+      // - Direct cookie object {name, value, ...}
+      // - Array of cookies [{...}, {...}] - use first one
+      let cookie = args;
+      if (args.cookie) {
+        cookie = args.cookie;
+      } else if (Array.isArray(args)) {
+        cookie = args[0];
+      } else if (args.cookies && Array.isArray(args.cookies)) {
+        cookie = args.cookies[0];
+      }
+
+      if (!cookie || typeof cookie !== 'object') {
+        return { success: false, error: 'Invalid args. Received: ' + JSON.stringify(args).slice(0, 200) };
+      }
+
+      if (!cookie.name) {
+        return { success: false, error: 'Cookie must have "name" field. Received keys: ' + Object.keys(cookie).join(', ') };
       }
 
       // Build URL from domain if not provided
