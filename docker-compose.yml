@@ -1,0 +1,29 @@
+# Browser Automation Toolkit - Docker Compose
+#
+# Usage:
+#   docker-compose up -d     # Start in background
+#   docker-compose logs -f   # View logs
+#   docker-compose down      # Stop
+#
+# Note: The server runs in Docker, but the Chrome extension runs in your browser.
+# Configure the extension's server URL to point to this container (default: http://127.0.0.1:8766)
+
+version: '3.8'
+
+services:
+  browser-toolkit:
+    build: .
+    container_name: browser-automation-toolkit
+    ports:
+      - "8766:8766"
+    environment:
+      - PORT=8766
+      - HOST=0.0.0.0
+      - COMMAND_TIMEOUT=30000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8766/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

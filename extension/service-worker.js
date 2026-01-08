@@ -511,6 +511,10 @@ const tools = {
 
   async wait_for({ selector, ref, state = 'visible', timeout = 5000 }, tabId) {
     const start = Date.now();
+    // Ensure args are serializable (convert undefined to null)
+    const refArg = ref || null;
+    const selectorArg = selector || null;
+    const stateArg = state || 'visible';
     while (Date.now() - start < timeout) {
       const result = await exec(tabId, (refId, sel, st) => {
         let el = refId ? window.__getElementByRef?.(refId) : sel ? document.querySelector(sel) : null;
@@ -522,7 +526,7 @@ const tools = {
         if (st === 'visible') return { found: visible };
         if (st === 'hidden') return { found: !visible };
         return { found: true };
-      }, [ref, selector, state]);
+      }, [refArg, selectorArg, stateArg]);
       if (result?.found) return { success: true, elapsed: Date.now() - start };
       await new Promise(r => setTimeout(r, 100));
     }

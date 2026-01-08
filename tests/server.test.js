@@ -30,7 +30,7 @@ function handleRequest(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.0.0' }));
+    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.1.0' }));
     return;
   }
 
@@ -156,7 +156,7 @@ describe('Server HTTP Endpoints', () => {
     const data = await res.json();
     assert.strictEqual(data.status, 'ok');
     assert.strictEqual(data.name, 'browser-automation-toolkit');
-    assert.strictEqual(data.version, '2.0.0');
+    assert.strictEqual(data.version, '2.1.0');
   });
 
   test('GET /tools returns tools list with count', async () => {
@@ -607,5 +607,266 @@ describe('CORS Support', () => {
     assert.ok(res.headers.get('access-control-allow-origin'));
     assert.ok(res.headers.get('access-control-allow-methods').includes('POST'));
     assert.ok(res.headers.get('access-control-allow-headers').includes('Content-Type'));
+  });
+});
+
+// ============ BATCH COMMANDS TESTS ============
+
+describe('Batch Commands Endpoint', () => {
+  let batchServer;
+  let batchPendingCommand = null;
+  let batchResultResolve = null;
+
+  function handleBatchRequest(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+
+    const url = new URL(req.url, `http://127.0.0.1:${PORT + 4}`);
+
+    // Extension polls for command
+    if (req.method === 'GET' && url.pathname === '/command') {
+      if (batchPendingCommand) {
+        const cmd = batchPendingCommand;
+        batchPendingCommand = null;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(cmd));
+      } else {
+        res.writeHead(204);
+        res.end();
+      }
+      return;
+    }
+
+    // Result from extension
+    if (req.method === 'POST' && url.pathname === '/result') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', () => {
+        try {
+          const result = JSON.parse(body);
+          if (batchResultResolve) {
+            batchResultResolve(result);
+          }
+          res.writeHead(200);
+          res.end();
+        } catch (e) {
+          res.writeHead(400);
+          res.end();
+        }
+      });
+      return;
+    }
+
+    // Batch commands endpoint
+    if (req.method === 'POST' && url.pathname === '/commands') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', async () => {
+        try {
+          const batch = JSON.parse(body);
+          const { commands, subtaskId } = batch;
+
+          if (!Array.isArray(commands) || commands.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Commands must be a non-empty array' }));
+            return;
+          }
+
+          const results = [];
+          let lastRef = null;
+          let hasError = false;
+
+          for (let i = 0; i < commands.length; i++) {
+            const cmd = commands[i];
+
+            if (!cmd.tool) {
+              results.push({ success: false, index: i, error: 'Missing tool parameter' });
+              hasError = true;
+              break;
+            }
+
+            // Handle server-side tools
+            if (cmd.tool === 'ping') {
+              results.push({
+                success: true,
+                index: i,
+                tool: 'ping',
+                result: { pong: true }
+              });
+              continue;
+            }
+
+            // Resolve $prev reference
+            const args = { ...cmd.args };
+            if (args.ref === '$prev' && lastRef) {
+              args.ref = lastRef;
+            }
+
+            // Queue for extension
+            batchPendingCommand = {
+              id: `batch_${Date.now()}_${i}`,
+              tool: cmd.tool,
+              args,
+              subtaskId
+            };
+
+            // Wait for result (short timeout for tests)
+            const resultPromise = new Promise(resolve => {
+              batchResultResolve = resolve;
+            });
+
+            const timeoutPromise = new Promise(resolve => {
+              setTimeout(() => resolve({ error: 'timeout' }), 500);
+            });
+
+            const result = await Promise.race([resultPromise, timeoutPromise]);
+            batchResultResolve = null;
+
+            if (result.result?.ref) {
+              lastRef = result.result.ref;
+            }
+
+            results.push({
+              success: result.success !== false && !result.error,
+              index: i,
+              tool: cmd.tool,
+              result: result.result || null,
+              error: result.error || null
+            });
+
+            if (result.error || result.success === false) {
+              hasError = true;
+              break;
+            }
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: !hasError,
+            subtaskId: subtaskId || null,
+            commandsExecuted: results.length,
+            commandsTotal: commands.length,
+            results
+          }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  }
+
+  before(() => {
+    batchServer = createServer(handleBatchRequest);
+    batchServer.listen(PORT + 4, '127.0.0.1');
+  });
+
+  after(() => {
+    batchServer.close();
+  });
+
+  beforeEach(() => {
+    batchPendingCommand = null;
+    batchResultResolve = null;
+  });
+
+  test('POST /commands with empty array returns 400', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands: [] })
+    });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.ok(data.error.includes('non-empty'));
+  });
+
+  test('POST /commands handles server-side ping tool', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [{ tool: 'ping' }],
+        subtaskId: 'task1.1'
+      })
+    });
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.subtaskId, 'task1.1');
+    assert.strictEqual(data.commandsExecuted, 1);
+    assert.strictEqual(data.results[0].tool, 'ping');
+    assert.strictEqual(data.results[0].result.pong, true);
+  });
+
+  test('POST /commands includes subtaskId in response', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [{ tool: 'ping' }],
+        subtaskId: 'task123.2'
+      })
+    });
+    const data = await res.json();
+    assert.strictEqual(data.subtaskId, 'task123.2');
+  });
+
+  test('POST /commands handles missing tool parameter', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [{ args: { url: 'test' } }]
+      })
+    });
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.success, false);
+    assert.ok(data.results[0].error.includes('Missing tool'));
+  });
+
+  test('POST /commands with invalid JSON returns 400', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not valid json'
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  test('POST /commands returns correct counts', async () => {
+    const testUrl = `http://127.0.0.1:${PORT + 4}`;
+    const res = await fetch(`${testUrl}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [
+          { tool: 'ping' },
+          { tool: 'ping' },
+          { tool: 'ping' }
+        ]
+      })
+    });
+    const data = await res.json();
+    assert.strictEqual(data.commandsTotal, 3);
+    assert.strictEqual(data.commandsExecuted, 3);
+    assert.strictEqual(data.results.length, 3);
   });
 });

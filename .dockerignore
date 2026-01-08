@@ -1,0 +1,31 @@
+# Dependencies
+node_modules
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# Tests
+tests/
+*.test.js
+
+# Extension (browser-side code, not needed in server container)
+extension/
+
+# Client UI (optional, can be served separately)
+client/
+
+# Documentation
+*.md
+CLAUDE.md
+LICENSE
+
+# Development
+.env.local
+.env.development

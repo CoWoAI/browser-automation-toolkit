@@ -4,11 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Browser Automation Toolkit v2.0.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
+Browser Automation Toolkit v2.1.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
 
 ```
 Your App → POST /command → server.js (8766) → Extension polls (configurable) → Chrome → Result
 ```
+
+**New in v2.1.0:**
+- SubtaskID support for future multi-browser routing
+- Batch commands endpoint (`POST /commands`)
+- Docker deployment support
+- Configurable command timeout via `COMMAND_TIMEOUT` env var
 
 ## Commands
 
@@ -164,7 +170,62 @@ curl -X POST http://127.0.0.1:8766/command \
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "import_cookies", "args": {"cookies": [...]}}'
+
+# Send command with subtaskId (for multi-browser routing)
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "screenshot", "subtaskId": "task123.1"}'
+
+# Batch commands (sequential execution)
+curl -X POST http://127.0.0.1:8766/commands \
+  -H "Content-Type: application/json" \
+  -d '{"commands": [{"tool": "navigate", "args": {"url": "https://example.com"}}, {"tool": "screenshot"}], "subtaskId": "task123.1"}'
 ```
+
+### Batch Commands Response
+
+```json
+{
+  "success": true,
+  "subtaskId": "task123.1",
+  "commandsExecuted": 2,
+  "commandsTotal": 2,
+  "results": [
+    {"success": true, "index": 0, "tool": "navigate", "result": {...}},
+    {"success": true, "index": 1, "tool": "screenshot", "result": {...}}
+  ]
+}
+```
+
+### Reference Chaining
+
+Use `"ref": "$prev"` to reference the result of the previous command:
+
+```json
+{
+  "commands": [
+    {"tool": "find", "args": {"selector": "button.submit"}},
+    {"tool": "click", "args": {"ref": "$prev"}}
+  ]
+}
+```
+
+## Docker Deployment
+
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+
+# Or build manually
+docker build -t browser-automation-toolkit .
+docker run -p 8766:8766 browser-automation-toolkit
+```
+
+**Note:** The server runs in Docker, but the Chrome extension runs in your browser. Configure the extension's server URL to point to the Docker container.
+
+**Environment Variables:**
+- `PORT`: Server port (default: 8766)
+- `COMMAND_TIMEOUT`: Command timeout in ms (default: 30000)
 
 ## Testing
 
@@ -175,9 +236,11 @@ npm test
 ```
 
 Tests cover:
-- HTTP endpoints (/, /tools, /command, /result)
+- HTTP endpoints (/, /tools, /command, /commands, /result)
 - Server-side tools (ping, get_tools)
 - Command queuing and result handling
+- Batch commands execution and error handling
+- SubtaskID propagation
 - Timeout behavior
 - CORS headers
 - Tool definitions validation (80+ tools)

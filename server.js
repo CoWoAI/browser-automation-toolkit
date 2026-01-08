@@ -9,12 +9,16 @@
 import { createServer } from 'http';
 
 const PORT = process.env.PORT || 8766;
-const TIMEOUT_MS = 30000;
+const HOST = process.env.HOST || '127.0.0.1';  // Use 0.0.0.0 for Docker
+const TIMEOUT_MS = parseInt(process.env.COMMAND_TIMEOUT) || 30000;
 
 // State
 let pendingCommand = null;
 let pendingResult = null;
 let resultResolve = null;
+
+// SubtaskId to browser/tab mapping for future multi-browser routing
+const subtaskBrowserMap = new Map();
 
 /**
  * Available tools documentation
@@ -564,7 +568,7 @@ function handleRequest(req, res) {
   // Health check
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.0.0' }));
+    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.1.0' }));
     return;
   }
 
@@ -618,12 +622,19 @@ function handleRequest(req, res) {
         }
 
         // Queue command for extension
+        const commandId = command.id || `cmd_${Date.now()}`;
         pendingCommand = {
-          id: command.id || `cmd_${Date.now()}`,
+          id: commandId,
           tool: command.tool,
           args: command.args || {},
-          tabId: command.tabId
+          tabId: command.tabId,
+          subtaskId: command.subtaskId || null
         };
+
+        // Store subtaskId -> tabId mapping for future multi-browser routing
+        if (command.subtaskId && command.tabId) {
+          subtaskBrowserMap.set(command.subtaskId, command.tabId);
+        }
 
         // Wait for result with timeout
         const resultPromise = new Promise(resolve => {
@@ -639,6 +650,106 @@ function handleRequest(req, res) {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON', message: e.message }));
+      }
+    });
+    return;
+  }
+
+  // Batch commands endpoint - execute multiple commands sequentially
+  if (req.method === 'POST' && url.pathname === '/commands') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const batch = JSON.parse(body);
+        const { commands, subtaskId } = batch;
+
+        if (!Array.isArray(commands) || commands.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Commands must be a non-empty array' }));
+          return;
+        }
+
+        const results = [];
+        let lastRef = null;
+        let hasError = false;
+
+        for (let i = 0; i < commands.length; i++) {
+          const cmd = commands[i];
+
+          if (!cmd.tool) {
+            results.push({
+              success: false,
+              index: i,
+              error: 'Missing tool parameter'
+            });
+            hasError = true;
+            break;
+          }
+
+          // Resolve $prev reference
+          const args = { ...cmd.args };
+          if (args.ref === '$prev' && lastRef) {
+            args.ref = lastRef;
+          }
+
+          // Queue command for extension
+          const commandId = cmd.id || `batch_${Date.now()}_${i}`;
+          pendingCommand = {
+            id: commandId,
+            tool: cmd.tool,
+            args,
+            tabId: cmd.tabId,
+            subtaskId: subtaskId || null
+          };
+
+          // Wait for result
+          const resultPromise = new Promise(resolve => {
+            resultResolve = resolve;
+          });
+
+          const timeoutPromise = new Promise(resolve => {
+            setTimeout(() => {
+              pendingCommand = null;
+              resolve({ error: 'timeout', message: `Command ${i} timed out after ${TIMEOUT_MS}ms` });
+            }, TIMEOUT_MS);
+          });
+
+          const result = await Promise.race([resultPromise, timeoutPromise]);
+          resultResolve = null;
+
+          // Track ref for next command
+          if (result.success !== false && !result.error && result.result?.ref) {
+            lastRef = result.result.ref;
+          }
+
+          results.push({
+            success: result.success !== false && !result.error,
+            index: i,
+            tool: cmd.tool,
+            description: cmd.description || '',
+            result: result.result || null,
+            error: result.error || null
+          });
+
+          // Stop on error
+          if (result.error || result.success === false) {
+            hasError = true;
+            break;
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: !hasError,
+          subtaskId: subtaskId || null,
+          commandsExecuted: results.length,
+          commandsTotal: commands.length,
+          results
+        }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON', message: e.message }));
@@ -677,18 +788,23 @@ const server = createServer(handleRequest);
 // Only start if run directly (not imported)
 const isMainModule = import.meta.url === `file://${process.argv[1]}`;
 if (isMainModule) {
-  server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Browser Automation Toolkit v2.0.0 - Command Server`);
-    console.log(`Listening on http://127.0.0.1:${PORT}`);
+  server.listen(PORT, HOST, () => {
+    console.log(`Browser Automation Toolkit v2.1.0 - Command Server`);
+    console.log(`Listening on http://${HOST}:${PORT}`);
     console.log(`Tools available: ${Object.keys(TOOLS).length}`);
+    console.log(`Command timeout: ${TIMEOUT_MS}ms`);
     console.log('');
     console.log('Endpoints:');
     console.log(`  GET  /          - Health check`);
     console.log(`  GET  /tools     - List all ${Object.keys(TOOLS).length} available tools`);
-    console.log(`  POST /command   - Send command (waits for result)`);
+    console.log(`  POST /command   - Send single command (waits for result)`);
+    console.log(`  POST /commands  - Send batch commands (sequential execution)`);
     console.log('');
-    console.log('Example:');
+    console.log('Single command example:');
     console.log(`  curl -X POST http://127.0.0.1:${PORT}/command -H "Content-Type: application/json" -d '{"tool": "screenshot"}'`);
+    console.log('');
+    console.log('Batch commands example:');
+    console.log(`  curl -X POST http://127.0.0.1:${PORT}/commands -H "Content-Type: application/json" -d '{"commands": [{"tool": "navigate", "args": {"url": "https://example.com"}}, {"tool": "screenshot"}], "subtaskId": "task1.1"}'`);
   });
 }
 
