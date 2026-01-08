@@ -11,7 +11,9 @@
     "downloads",
     "debugger",
     "webNavigation",
-    "webRequest"
+    "webRequest",
+    "declarativeNetRequest",
+    "browsingData"
   ],
   "host_permissions": [
     "<all_urls>"

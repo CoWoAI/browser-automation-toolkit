@@ -903,14 +903,49 @@ const tools = {
   },
 
   async block_urls({ patterns }) {
-    state.blockedUrls.push(...patterns);
-    return { success: true, blocked: state.blockedUrls };
+    // Use declarativeNetRequest API for Manifest V3
+    const rules = patterns.map((pattern, index) => ({
+      id: state.blockedUrls.length + index + 1,
+      priority: 1,
+      action: { type: 'block' },
+      condition: { urlFilter: pattern, resourceTypes: ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font', 'object', 'xmlhttprequest', 'ping', 'media', 'websocket', 'other'] }
+    }));
+
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        addRules: rules,
+        removeRuleIds: []
+      });
+      state.blockedUrls.push(...patterns);
+      return { success: true, blocked: state.blockedUrls };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   },
 
   async unblock_urls({ patterns }) {
-    if (patterns) state.blockedUrls = state.blockedUrls.filter(p => !patterns.includes(p));
-    else state.blockedUrls = [];
-    return { success: true, blocked: state.blockedUrls };
+    try {
+      const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
+      let removeIds = [];
+
+      if (patterns) {
+        // Remove specific patterns
+        removeIds = existingRules.filter(r => patterns.some(p => r.condition.urlFilter === p)).map(r => r.id);
+        state.blockedUrls = state.blockedUrls.filter(p => !patterns.includes(p));
+      } else {
+        // Remove all
+        removeIds = existingRules.map(r => r.id);
+        state.blockedUrls = [];
+      }
+
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        addRules: [],
+        removeRuleIds: removeIds
+      });
+      return { success: true, blocked: state.blockedUrls };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   },
 
   async set_request_interception({ enabled, patterns }) {
@@ -1111,13 +1146,7 @@ chrome.webRequest.onCompleted.addListener((details) => {
   state.networkRequests.push({ url: details.url, method: details.method, statusCode: details.statusCode, type: details.type, timestamp: details.timeStamp });
 }, { urls: ['<all_urls>'] });
 
-// Block URLs
-chrome.webRequest.onBeforeRequest.addListener((details) => {
-  for (const pattern of state.blockedUrls) {
-    if (details.url.includes(pattern)) return { cancel: true };
-  }
-  return {};
-}, { urls: ['<all_urls>'] }, ['blocking']);
+// Note: URL blocking uses declarativeNetRequest API (see block_urls/unblock_urls tools)
 
 // Message listeners
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
