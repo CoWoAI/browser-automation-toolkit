@@ -581,16 +581,54 @@ const tools = {
   },
 
   async import_cookies({ cookies, format = 'json' }, tabId) {
-    const tab = await chrome.tabs.get(tabId);
+    let fallbackUrl = null;
+    if (tabId) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        fallbackUrl = tab.url;
+      } catch (e) { /* ignore */ }
+    }
+
     const parsedCookies = format === 'netscape' ? parseNetscapeCookies(cookies) : (typeof cookies === 'string' ? JSON.parse(cookies) : cookies);
     let imported = 0;
+    let failed = 0;
+
     for (const cookie of parsedCookies) {
       try {
-        await chrome.cookies.set({ url: tab.url, name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path || '/', secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, expirationDate: cookie.expirationDate });
+        // Build URL from cookie domain
+        let url = cookie.url;
+        if (!url && cookie.domain) {
+          const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+          url = `http${cookie.secure ? 's' : ''}://${domain}${cookie.path || '/'}`;
+        }
+        if (!url) url = fallbackUrl;
+
+        if (!url) {
+          failed++;
+          continue;
+        }
+
+        const cookieData = {
+          url,
+          name: cookie.name,
+          value: cookie.value,
+          path: cookie.path || '/',
+          secure: cookie.secure || false,
+          httpOnly: cookie.httpOnly || false,
+          sameSite: cookie.sameSite || 'lax'
+        };
+
+        if (cookie.domain) cookieData.domain = cookie.domain;
+        if (cookie.expirationDate) cookieData.expirationDate = cookie.expirationDate;
+
+        await chrome.cookies.set(cookieData);
         imported++;
-      } catch (e) { console.warn('[BAT] Failed to import cookie:', cookie.name); }
+      } catch (e) {
+        console.warn('[BAT] Failed to import cookie:', cookie.name, e.message);
+        failed++;
+      }
     }
-    return { success: true, imported, total: parsedCookies.length };
+    return { success: true, imported, failed, total: parsedCookies.length };
   },
 
   async export_cookies({ format = 'json', domain }, tabId) {
@@ -609,9 +647,44 @@ const tools = {
     return { success: true, cookies };
   },
 
-  async set_cookie({ cookie }) {
-    const result = await chrome.cookies.set(cookie);
-    return { success: !!result, cookie: result };
+  async set_cookie({ cookie }, tabId) {
+    try {
+      // Build URL from domain if not provided
+      let url = cookie.url;
+      if (!url && cookie.domain) {
+        const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+        url = `http${cookie.secure ? 's' : ''}://${domain}${cookie.path || '/'}`;
+      }
+      if (!url && tabId) {
+        const tab = await chrome.tabs.get(tabId);
+        url = tab.url;
+      }
+
+      const cookieData = {
+        url,
+        name: cookie.name,
+        value: cookie.value,
+        path: cookie.path || '/',
+        secure: cookie.secure || false,
+        httpOnly: cookie.httpOnly || false,
+        sameSite: cookie.sameSite || 'lax'
+      };
+
+      // Only set domain if provided (let Chrome infer from URL otherwise)
+      if (cookie.domain) {
+        cookieData.domain = cookie.domain;
+      }
+
+      // Only set expiration for persistent cookies
+      if (cookie.expirationDate) {
+        cookieData.expirationDate = cookie.expirationDate;
+      }
+
+      const result = await chrome.cookies.set(cookieData);
+      return { success: !!result, cookie: result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   },
 
   async delete_cookies({ url, name }) {
