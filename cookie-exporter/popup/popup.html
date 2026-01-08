@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Cookie Exporter</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; width: 400px; padding: 16px; background: #f5f5f5; }
+    h1 { font-size: 18px; margin-bottom: 16px; color: #333; display: flex; align-items: center; gap: 8px; }
+    .section { background: white; border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .section h2 { font-size: 14px; margin-bottom: 12px; color: #666; }
+    .form-group { margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+    input[type="text"], select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+    textarea { width: 100%; height: 120px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; font-family: monospace; resize: vertical; }
+    .btn-row { display: flex; gap: 8px; }
+    button { flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .status { padding: 8px 12px; border-radius: 4px; font-size: 12px; margin-top: 12px; display: none; }
+    .status.success { display: block; background: #d1fae5; color: #065f46; }
+    .status.error { display: block; background: #fee2e2; color: #991b1b; }
+    .cookie-count { font-size: 12px; color: #666; margin-top: 8px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 8px; text-align: center; cursor: pointer; border-radius: 6px; font-size: 13px; background: #e5e7eb; color: #374151; }
+    .tab.active { background: #2563eb; color: white; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #374151; }
+    .checkbox-row input { width: auto; }
+  </style>
+</head>
+<body>
+  <h1>Cookie Exporter</h1>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="export">Export</div>
+    <div class="tab" data-tab="import">Import</div>
+  </div>
+
+  <div id="export-tab" class="tab-content active">
+    <div class="section">
+      <h2>Export Cookies</h2>
+      <div class="form-group">
+        <label>Domain (leave empty for all cookies)</label>
+        <input type="text" id="export-domain" placeholder="example.com">
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="export-format">
+          <option value="json">JSON</option>
+          <option value="netscape">Netscape (curl compatible)</option>
+        </select>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="current-domain-only">
+        <label for="current-domain-only">Current tab domain only</label>
+      </div>
+      <div class="btn-row" style="margin-top: 12px;">
+        <button class="btn-primary" id="export-btn">Export</button>
+        <button class="btn-secondary" id="copy-btn">Copy to Clipboard</button>
+      </div>
+      <div class="cookie-count" id="export-count"></div>
+    </div>
+
+    <div class="section">
+      <label>Exported Cookies</label>
+      <textarea id="export-output" readonly placeholder="Cookies will appear here..."></textarea>
+      <button class="btn-secondary" id="download-btn" style="margin-top: 8px; width: 100%;">Download File</button>
+    </div>
+  </div>
+
+  <div id="import-tab" class="tab-content">
+    <div class="section">
+      <h2>Import Cookies</h2>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="import-format">
+          <option value="json">JSON</option>
+          <option value="netscape">Netscape</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Paste cookies or drop file</label>
+        <textarea id="import-input" placeholder="Paste JSON or Netscape format cookies here..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Target URL (required)</label>
+        <input type="text" id="import-url" placeholder="https://example.com">
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="use-current-url">
+        <label for="use-current-url">Use current tab URL</label>
+      </div>
+      <div class="btn-row" style="margin-top: 12px;">
+        <button class="btn-primary" id="import-btn">Import Cookies</button>
+        <button class="btn-secondary" id="load-file-btn">Load from File</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Quick Actions</h2>
+      <div class="btn-row">
+        <button class="btn-danger" id="clear-domain-btn">Clear Domain Cookies</button>
+        <button class="btn-secondary" id="view-cookies-btn">View All Cookies</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <input type="file" id="file-input" style="display: none;" accept=".json,.txt">
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -2,6 +2,8 @@
 
 Control Chrome via HTTP API through a browser extension. Simple, fast, no WebDriver required.
 
+**v2.0.0** - Now with 80+ tools for complete browser automation.
+
 ## Quick Start
 
 ```bash
@@ -22,110 +24,294 @@ curl -X POST http://127.0.0.1:8766/command \
 ## Architecture
 
 ```
-Your App → HTTP POST → Server (8766) → Extension polls → Chrome → Result
+Your App → HTTP POST → Server (8766) → Extension polls (100ms) → Chrome → Result
 ```
 
-Extension polls every 100ms. No WebSocket, no complex setup.
+- Extension polls every 100ms for commands
+- No WebSocket, no complex setup
+- 30 second command timeout (configurable)
+- Element refs use WeakRef for memory safety
 
-## Available Tools
+## Installation
+
+### Node.js Server
+```bash
+npm install   # No dependencies!
+node server.js
+```
+
+### Chrome Extension
+1. Go to `chrome://extensions`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked**
+4. Select the `extension/` directory
+
+### Cookie Exporter (Optional)
+A separate minimal extension for exporting/importing cookies between browsers:
+1. Go to `chrome://extensions`
+2. Load unpacked → select `cookie-exporter/` directory
+
+## Available Tools (80+)
 
 ### Navigation
-| Tool | Args | Description |
-|------|------|-------------|
-| `navigate` | `url`, `direction` | Navigate to URL or back/forward/reload |
-| `reload` | `ignoreCache` | Reload page |
+| Tool | Description |
+|------|-------------|
+| `navigate` | Navigate to URL or use direction: "back", "forward", "reload" |
+| `reload` | Reload current page. Set ignoreCache=true to bypass cache |
 
-### Screenshots & Content
-| Tool | Args | Description |
-|------|------|-------------|
-| `screenshot` | `fullPage`, `format`, `quality` | Capture viewport |
-| `read_page` | `filter`, `depth`, `ref_id` | Get accessibility tree |
-| `get_html` | `selector`, `outer` | Get page/element HTML |
-| `get_text` | `selector` | Get text content |
+### Screenshots & Page Content
+| Tool | Description |
+|------|-------------|
+| `screenshot` | Capture viewport screenshot (png/jpeg) |
+| `screenshot_element` | Capture screenshot of specific element |
+| `screenshot_full_page` | Capture full scrollable page |
+| `read_page` | Get accessibility tree (all/interactive elements) |
+| `get_html` | Get HTML of page or element |
+| `get_text` | Get text content of page or element |
+| `save_pdf` | Save page as PDF (requires debugger API) |
 
 ### Element Interaction
-| Tool | Args | Description |
-|------|------|-------------|
-| `click` | `ref`, `coordinate`, `button`, `clickCount` | Click element |
-| `type` | `text`, `ref`, `clear` | Type into element |
-| `fill` | `ref`, `value` | Fill input (clears first) |
-| `select` | `ref`, `value` | Select dropdown option |
-| `check` | `ref`, `checked` | Check/uncheck checkbox |
-| `focus` | `ref` | Focus element |
-| `blur` | `ref` | Blur element |
-| `hover` | `ref`, `coordinate` | Hover over element |
+| Tool | Description |
+|------|-------------|
+| `click` | Click element by ref or coordinates |
+| `type` | Type text into element |
+| `fill` | Fill input (clears existing content first) |
+| `select` | Select dropdown option by value or text |
+| `check` | Check/uncheck checkbox or radio |
+| `focus` | Focus element |
+| `blur` | Blur (unfocus) element |
+| `hover` | Hover over element (triggers mouseenter/mouseover) |
+| `set_attribute` | Set attribute on element |
+| `remove_attribute` | Remove attribute from element |
+| `set_style` | Set CSS style property |
 
-### Keyboard & Mouse
-| Tool | Args | Description |
-|------|------|-------------|
-| `press` | `key`, `modifiers` | Press key (Enter, Tab, etc.) |
-| `keyboard` | `action`, `key`, `text` | Low-level keyboard control |
-| `mouse` | `action`, `x`, `y`, `button` | Low-level mouse control |
-| `drag` | `from`, `to` | Drag between points |
-| `scroll` | `direction`, `amount`, `ref` | Scroll page |
-| `scroll_to` | `ref` | Scroll element into view |
+### DOM Manipulation
+| Tool | Description |
+|------|-------------|
+| `remove_element` | Remove element from DOM |
+| `hide_element` | Hide element (display:none) |
+| `show_element` | Show hidden element |
+| `highlight_element` | Temporarily highlight element with colored border |
+| `insert_html` | Insert HTML relative to element |
+
+### Keyboard
+| Tool | Description |
+|------|-------------|
+| `press` | Press key (Enter, Tab, Escape, ArrowDown, etc.) |
+| `keyboard` | Low-level keyboard: down, up, press, type |
+
+### Mouse
+| Tool | Description |
+|------|-------------|
+| `mouse` | Low-level mouse: move, down, up, click |
+| `drag` | Drag from [x,y] to [x,y] |
+
+### Scrolling
+| Tool | Description |
+|------|-------------|
+| `scroll` | Scroll page (up/down/left/right) |
+| `scroll_to` | Scroll element into view |
+| `scroll_to_bottom` | Scroll to page bottom |
+| `scroll_to_top` | Scroll to page top |
+| `infinite_scroll` | Keep scrolling until no new content |
 
 ### Tabs
-| Tool | Args | Description |
-|------|------|-------------|
-| `get_tabs` | | List all tabs |
-| `create_tab` | `url`, `active` | Create new tab |
-| `close_tab` | `tabId` | Close tab |
-| `switch_tab` | `tabId` | Switch to tab |
+| Tool | Description |
+|------|-------------|
+| `get_tabs` | List all browser tabs |
+| `create_tab` | Create new tab |
+| `close_tab` | Close tab |
+| `switch_tab` | Switch to tab and focus window |
+| `duplicate_tab` | Duplicate tab |
+
+### Windows
+| Tool | Description |
+|------|-------------|
+| `get_windows` | List all browser windows |
+| `create_window` | Create new window (normal/popup/panel) |
+| `close_window` | Close window |
+| `resize_window` | Resize window |
+| `move_window` | Move window |
+| `maximize_window` | Maximize window |
+| `minimize_window` | Minimize window |
+| `fullscreen_window` | Fullscreen window |
 
 ### Wait
-| Tool | Args | Description |
-|------|------|-------------|
-| `wait` | `ms` | Wait milliseconds |
-| `wait_for` | `selector`, `ref`, `state`, `timeout` | Wait for element |
-| `wait_for_navigation` | `timeout` | Wait for navigation |
+| Tool | Description |
+|------|-------------|
+| `wait` | Wait for milliseconds |
+| `wait_for` | Wait for element (visible/hidden/attached) |
+| `wait_for_navigation` | Wait for page navigation |
+| `wait_for_network_idle` | Wait until no network requests |
+| `poll_until` | Poll until JavaScript returns truthy |
 
 ### Execute Script
-| Tool | Args | Description |
-|------|------|-------------|
-| `execute_script` | `code`, `args` | Run JavaScript |
-| `evaluate` | `code`, `args` | Alias for execute_script |
+| Tool | Description |
+|------|-------------|
+| `execute_script` | Run JavaScript in page context |
+| `evaluate` | Alias for execute_script |
 
-### Cookies & Storage
-| Tool | Args | Description |
-|------|------|-------------|
-| `get_cookies` | `url`, `name` | Get cookies |
-| `set_cookie` | `cookie` | Set cookie |
-| `delete_cookies` | `url`, `name` | Delete cookies |
-| `get_storage` | `type`, `key` | Get localStorage/sessionStorage |
-| `set_storage` | `type`, `key`, `value` | Set storage item |
-| `clear_storage` | `type` | Clear storage |
+### Session & Authentication
+| Tool | Description |
+|------|-------------|
+| `save_session` | Save cookies + localStorage + sessionStorage |
+| `restore_session` | Restore saved session |
+| `import_cookies` | Import cookies (JSON or Netscape format) |
+| `export_cookies` | Export cookies (JSON or Netscape format) |
 
-### Element Queries
-| Tool | Args | Description |
-|------|------|-------------|
-| `find` | `selector` | Find element, return ref |
-| `find_all` | `selector`, `limit` | Find all matching elements |
-| `find_by_text` | `text`, `exact` | Find by text content |
-| `get_element_info` | `ref` | Get element properties |
-| `get_bounding_box` | `ref` | Get element position/size |
+### Cookies
+| Tool | Description |
+|------|-------------|
+| `get_cookies` | Get cookies (filter by url/name) |
+| `set_cookie` | Set cookie |
+| `delete_cookies` | Delete cookies |
+
+### Storage
+| Tool | Description |
+|------|-------------|
+| `get_storage` | Get localStorage or sessionStorage |
+| `set_storage` | Set storage item |
+| `clear_storage` | Clear storage |
 
 ### Page Info
-| Tool | Args | Description |
-|------|------|-------------|
-| `get_url` | | Get current URL |
-| `get_title` | | Get page title |
-| `get_viewport` | | Get viewport dimensions |
+| Tool | Description |
+|------|-------------|
+| `get_url` | Get current URL |
+| `get_title` | Get page title |
+| `get_viewport` | Get viewport dimensions |
+
+### Element Queries
+| Tool | Description |
+|------|-------------|
+| `find` | Find first element by CSS selector |
+| `find_all` | Find all elements matching selector |
+| `find_by_text` | Find element containing text |
+| `get_element_info` | Get element properties and attributes |
+| `get_bounding_box` | Get element position and size |
+| `count_elements` | Count elements matching selector |
+| `get_all_text` | Get text from all matching elements |
+| `click_all` | Click all elements matching selector |
+
+### Forms
+| Tool | Description |
+|------|-------------|
+| `fill_form` | Fill multiple form fields at once |
+| `submit_form` | Submit form |
+| `get_form_data` | Get all form field values |
+| `clear_form` | Reset form |
+
+### Tables
+| Tool | Description |
+|------|-------------|
+| `get_table_data` | Extract table as array of objects |
+
+### Frames
+| Tool | Description |
+|------|-------------|
+| `get_frames` | List all iframes |
+| `switch_frame` | Switch to frame |
+| `switch_to_main` | Switch back to main frame |
+
+### Files
+| Tool | Description |
+|------|-------------|
+| `set_file` | Set files on file input |
+| `download` | Download file from URL |
+| `wait_for_download` | Wait for download to complete |
+
+### Dialogs
+| Tool | Description |
+|------|-------------|
+| `handle_dialog` | Handle alert/confirm/prompt |
+| `get_dialog` | Get current dialog info |
+
+### Console & Errors
+| Tool | Description |
+|------|-------------|
+| `get_console_logs` | Get captured console logs |
+| `get_page_errors` | Get captured JavaScript errors |
+| `clear_console_logs` | Clear captured logs |
+
+### Network
+| Tool | Description |
+|------|-------------|
+| `get_network_requests` | Get captured network requests |
+| `clear_network_requests` | Clear captured requests |
+| `block_urls` | Block requests matching patterns |
+| `unblock_urls` | Unblock URL patterns |
+| `mock_response` | Mock response for URL pattern |
+| `clear_mocks` | Clear response mocks |
+| `wait_for_request` | Wait for request matching pattern |
+| `wait_for_response` | Wait for response matching pattern |
+
+### Device Emulation
+| Tool | Description |
+|------|-------------|
+| `set_user_agent` | Set user agent string |
+| `set_geolocation` | Set mock geolocation |
+| `clear_geolocation` | Clear mock geolocation |
+| `emulate_device` | Emulate device (iPhone, Pixel, iPad) |
+
+### Clipboard
+| Tool | Description |
+|------|-------------|
+| `get_clipboard` | Get clipboard text |
+| `set_clipboard` | Set clipboard text |
+
+### Browser State
+| Tool | Description |
+|------|-------------|
+| `clear_cache` | Clear browser cache |
+| `clear_browsing_data` | Clear cache/cookies/history/localStorage |
+
+### Assertions (Testing)
+| Tool | Description |
+|------|-------------|
+| `assert_text` | Assert element text equals/contains value |
+| `assert_visible` | Assert element is visible |
+| `assert_hidden` | Assert element is hidden |
+| `assert_url` | Assert URL equals/contains value |
+| `assert_title` | Assert title equals/contains value |
+| `assert_element_count` | Assert number of matching elements |
+
+### Utility
+| Tool | Description |
+|------|-------------|
+| `ping` | Health check |
+| `get_tools` | List all available tools |
+| `retry` | Retry tool on failure |
 
 ## Examples
 
+### Basic Navigation
 ```bash
 # Navigate to a page
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "navigate", "args": {"url": "https://example.com"}}'
 
-# Take screenshot
+# Go back
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
-  -d '{"tool": "screenshot"}' | jq -r '.result.image' | base64 -d > screenshot.png
+  -d '{"tool": "navigate", "args": {"direction": "back"}}'
+```
 
-# Find element and click
+### Screenshots
+```bash
+# Take screenshot and save to file
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "screenshot"}' | jq -r '.result.image' | cut -d',' -f2 | base64 -d > screenshot.png
+
+# JPEG with quality
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "screenshot", "args": {"format": "jpeg", "quality": 80}}'
+```
+
+### Element Interaction
+```bash
+# Find and click
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "find", "args": {"selector": "button.submit"}}'
@@ -135,32 +321,83 @@ curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "click", "args": {"ref": "ref_1"}}'
 
-# Type into input
+# Click at coordinates
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
-  -d '{"tool": "find", "args": {"selector": "input[name=email]"}}'
+  -d '{"tool": "click", "args": {"coordinate": [100, 200]}}'
 
+# Fill form
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
-  -d '{"tool": "fill", "args": {"ref": "ref_2", "value": "test@example.com"}}'
+  -d '{"tool": "fill_form", "args": {"fields": {"#email": "test@example.com", "#password": "secret123"}}}'
+```
 
-# Execute JavaScript
+### Session Management
+```bash
+# Save session (cookies + storage)
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "save_session", "args": {"name": "my-session"}}' > session.json
+
+# Restore session later
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "restore_session", "args": {"session": '"$(cat session.json | jq '.result.session')"'}}'
+
+# Export cookies in Netscape format (curl compatible)
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "export_cookies", "args": {"format": "netscape"}}' | jq -r '.result.cookies' > cookies.txt
+
+# Use with curl
+curl -b cookies.txt https://example.com/api
+```
+
+### Wait and Poll
+```bash
+# Wait for element to appear
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "wait_for", "args": {"selector": ".loaded", "timeout": 5000}}'
+
+# Poll until condition
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "poll_until", "args": {"code": "window.dataLoaded === true", "timeout": 10000}}'
+```
+
+### Execute JavaScript
+```bash
+# Get page title
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
   -d '{"tool": "execute_script", "args": {"code": "return document.title"}}'
 
-# Wait for element
+# Complex script
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
-  -d '{"tool": "wait_for", "args": {"selector": ".loaded", "timeout": 5000}}'
+  -d '{"tool": "execute_script", "args": {"code": "return Array.from(document.querySelectorAll(\"a\")).map(a => a.href)"}}'
+```
+
+### Network Blocking
+```bash
+# Block ads and tracking
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "block_urls", "args": {"patterns": ["google-analytics", "facebook.com/tr", "ads"]}}'
+
+# Unblock all
+curl -X POST http://127.0.0.1:8766/command \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "unblock_urls"}'
 ```
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Health check |
-| GET | `/tools` | List available tools |
+| GET | `/` | Health check - returns version info |
+| GET | `/tools` | List all 80+ available tools |
 | POST | `/command` | Send command (waits for result) |
 | GET | `/command` | Extension polls for commands |
 | POST | `/result` | Extension posts results |
@@ -179,6 +416,13 @@ A test UI is available:
 cd client && python3 server.py
 # Open http://127.0.0.1:8080
 ```
+
+## Security Notes
+
+- Server only listens on 127.0.0.1 (localhost)
+- Extension has broad permissions for full automation capability
+- Cookie/session exports contain sensitive data - handle securely
+- Not recommended for production use without additional security measures
 
 ## License
 
