@@ -85,7 +85,39 @@ For transferring sessions between browsers:
 - **Element refs**: WeakRef-based (`ref_1`, `ref_2`, etc.) to avoid memory leaks
 - **Network capture**: Max 1000 requests stored in memory
 - **Permissions**: `scripting`, `tabs`, `cookies`, `storage`, `downloads`, `debugger`, `webNavigation`, `webRequest`, `declarativeNetRequest`, `browsingData`
-- **Cookie prefixes**: Special handling for `__Host-` and `__Secure-` cookies
+- **Cookie handling**: See Cookie Import/Export section below
+
+## Cookie Import/Export
+
+The toolkit handles cookies with careful attention to Chrome's security requirements:
+
+### Cookie Types
+- **Domain cookies**: `domain: ".google.com"` (leading dot) - accessible by all subdomains
+- **Host-only cookies**: `domain: "accounts.google.com"` (no dot) - only for exact host
+
+### Special Cookie Prefixes
+- **`__Host-` cookies**: Must have `secure=true`, `path=/`, and NO domain attribute
+- **`__Secure-` cookies**: Must have `secure=true`, domain is optional
+
+### SameSite Attribute
+Chrome's cookies API uses different values than HTTP standards:
+- `"none"` → `"no_restriction"` (auto-converted)
+- `"lax"` → `"lax"`
+- `"strict"` → `"strict"`
+
+**Important**: `SameSite=None` (`no_restriction`) requires:
+- `secure: true` (enforced automatically)
+- `https://` URL (converted automatically from `http://`)
+
+### Import Behavior
+When importing cookies via `import_cookies`:
+1. Domain cookies (leading dot) set the `domain` attribute
+2. Host-only cookies (no leading dot) do NOT set `domain` - Chrome infers from URL
+3. `__Host-` and `__Secure-` prefixes are handled according to spec
+4. `SameSite=None` cookies are automatically secured
+
+### URL Field
+Cookies should include a `url` field for reliable import. If missing, URL is constructed from `domain` and `path`. The CoWoAI-Sync server includes this field in cookie query responses.
 
 ## Adding New Tools
 

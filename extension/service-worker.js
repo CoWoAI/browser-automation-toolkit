@@ -584,16 +584,38 @@ const tools = {
     // Restore cookies
     for (const cookie of session.cookies || []) {
       try {
-        const cookieData = { url: session.url, name: cookie.name, value: cookie.value, path: cookie.path || '/', secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite };
+        // Normalize sameSite - Chrome API uses 'no_restriction' instead of 'none'
+        let sameSite = cookie.sameSite || 'lax';
+        if (sameSite === 'unspecified') sameSite = 'lax';
+        if (sameSite === 'none') sameSite = 'no_restriction';
+
+        // SameSite=None (no_restriction) requires Secure=true and https URL
+        let secure = cookie.secure || false;
+        let url = session.url;
+        if (sameSite === 'no_restriction') {
+          secure = true;
+          if (url && url.startsWith('http://')) {
+            url = url.replace('http://', 'https://');
+          }
+        }
+
+        const cookieData = { url, name: cookie.name, value: cookie.value, path: cookie.path || '/', secure, httpOnly: cookie.httpOnly, sameSite };
         // __Host- cookies must NOT have domain set
         if (cookie.name.startsWith('__Host-')) {
           cookieData.secure = true;
           cookieData.path = '/';
         } else if (cookie.name.startsWith('__Secure-')) {
           cookieData.secure = true;
-          if (cookie.domain) cookieData.domain = cookie.domain;
+          // Only set domain for domain-scoped cookies (leading dot)
+          if (cookie.domain && cookie.domain.startsWith('.')) {
+            cookieData.domain = cookie.domain;
+          }
         } else if (cookie.domain) {
-          cookieData.domain = cookie.domain;
+          // Only set domain for domain-scoped cookies (leading dot)
+          // Host-only cookies should NOT have domain set - Chrome infers from URL
+          if (cookie.domain.startsWith('.')) {
+            cookieData.domain = cookie.domain;
+          }
         }
         if (cookie.expirationDate) cookieData.expirationDate = cookie.expirationDate;
         await chrome.cookies.set(cookieData);
@@ -655,31 +677,50 @@ const tools = {
           continue;
         }
 
-        // Normalize sameSite - use 'lax' as default for unspecified
+        // Normalize sameSite - Chrome API uses 'no_restriction' instead of 'none'
         let sameSite = cookie.sameSite || 'lax';
         if (sameSite === 'unspecified') sameSite = 'lax';
+        if (sameSite === 'none') sameSite = 'no_restriction';
+
+        // SameSite=None (no_restriction) requires Secure=true
+        let secure = cookie.secure || false;
+        if (sameSite === 'no_restriction') {
+          secure = true;
+          // Also ensure URL uses https
+          if (url.startsWith('http://')) {
+            url = url.replace('http://', 'https://');
+          }
+        }
 
         const cookieData = {
           url,
           name: cookie.name,
           value: cookie.value,
           path: cookie.path || '/',
-          secure: cookie.secure || false,
+          secure,
           httpOnly: cookie.httpOnly || false,
           sameSite
         };
 
         // __Host- cookies must NOT have domain set, must have secure=true and path='/'
         // __Secure- cookies must have secure=true
+        // Host-only cookies (domain without leading dot) should NOT have domain set
         if (cookie.name.startsWith('__Host-')) {
           cookieData.secure = true;
           cookieData.path = '/';
           // Do NOT set domain for __Host- cookies
         } else if (cookie.name.startsWith('__Secure-')) {
           cookieData.secure = true;
-          if (cookie.domain) cookieData.domain = cookie.domain;
+          // Only set domain for domain-scoped cookies (leading dot)
+          if (cookie.domain && cookie.domain.startsWith('.')) {
+            cookieData.domain = cookie.domain;
+          }
         } else if (cookie.domain) {
-          cookieData.domain = cookie.domain;
+          // Only set domain for domain-scoped cookies (leading dot)
+          // Host-only cookies should NOT have domain set - Chrome infers from URL
+          if (cookie.domain.startsWith('.')) {
+            cookieData.domain = cookie.domain;
+          }
         }
         if (cookie.expirationDate) cookieData.expirationDate = cookie.expirationDate;
 
@@ -760,31 +801,49 @@ const tools = {
         url = tab.url;
       }
 
-      // Normalize sameSite - use 'lax' as default for unspecified
+      // Normalize sameSite - Chrome API uses 'no_restriction' instead of 'none'
       let sameSite = cookie.sameSite || 'lax';
       if (sameSite === 'unspecified') sameSite = 'lax';
+      if (sameSite === 'none') sameSite = 'no_restriction';
+
+      // SameSite=None (no_restriction) requires Secure=true and https URL
+      let secure = cookie.secure || false;
+      if (sameSite === 'no_restriction') {
+        secure = true;
+        if (url && url.startsWith('http://')) {
+          url = url.replace('http://', 'https://');
+        }
+      }
 
       const cookieData = {
         url,
         name: cookie.name,
         value: cookie.value,
         path: cookie.path || '/',
-        secure: cookie.secure || false,
+        secure,
         httpOnly: cookie.httpOnly || false,
         sameSite
       };
 
       // __Host- cookies must NOT have domain set, must have secure=true and path='/'
       // __Secure- cookies must have secure=true
+      // Host-only cookies (domain without leading dot) should NOT have domain set
       if (cookie.name.startsWith('__Host-')) {
         cookieData.secure = true;
         cookieData.path = '/';
         // Do NOT set domain for __Host- cookies
       } else if (cookie.name.startsWith('__Secure-')) {
         cookieData.secure = true;
-        if (cookie.domain) cookieData.domain = cookie.domain;
+        // Only set domain for domain-scoped cookies (leading dot)
+        if (cookie.domain && cookie.domain.startsWith('.')) {
+          cookieData.domain = cookie.domain;
+        }
       } else if (cookie.domain) {
-        cookieData.domain = cookie.domain;
+        // Only set domain for domain-scoped cookies (leading dot)
+        // Host-only cookies should NOT have domain set - Chrome infers from URL
+        if (cookie.domain.startsWith('.')) {
+          cookieData.domain = cookie.domain;
+        }
       }
 
       // Only set expiration for persistent cookies

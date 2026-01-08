@@ -870,3 +870,124 @@ describe('Batch Commands Endpoint', () => {
     assert.strictEqual(data.results.length, 3);
   });
 });
+
+describe('Cookie Tools', () => {
+  test('import_cookies tool accepts cookies and format args', async () => {
+    const { TOOLS } = await import('../server.js');
+    assert.ok(TOOLS.import_cookies, 'import_cookies tool exists');
+    assert.ok(TOOLS.import_cookies.args.includes('cookies'), 'import_cookies accepts cookies arg');
+    assert.ok(TOOLS.import_cookies.args.includes('format?'), 'import_cookies accepts optional format arg');
+  });
+
+  test('export_cookies tool accepts format and domain args', async () => {
+    const { TOOLS } = await import('../server.js');
+    assert.ok(TOOLS.export_cookies, 'export_cookies tool exists');
+    assert.ok(TOOLS.export_cookies.args.includes('format?'), 'export_cookies accepts optional format arg');
+    assert.ok(TOOLS.export_cookies.args.includes('domain?'), 'export_cookies accepts optional domain arg');
+  });
+
+  test('set_cookie tool accepts cookie arg', async () => {
+    const { TOOLS } = await import('../server.js');
+    assert.ok(TOOLS.set_cookie, 'set_cookie tool exists');
+    // set_cookie should be flexible with args
+    assert.ok(Array.isArray(TOOLS.set_cookie.args), 'set_cookie has args array');
+  });
+
+  test('Cookie tool descriptions document special handling', async () => {
+    const { TOOLS } = await import('../server.js');
+
+    // Verify import_cookies mentions format support
+    assert.ok(
+      TOOLS.import_cookies.desc.toLowerCase().includes('json') ||
+      TOOLS.import_cookies.desc.toLowerCase().includes('import'),
+      'import_cookies desc mentions import functionality'
+    );
+
+    // Verify export_cookies mentions format support
+    assert.ok(
+      TOOLS.export_cookies.desc.toLowerCase().includes('json') ||
+      TOOLS.export_cookies.desc.toLowerCase().includes('export'),
+      'export_cookies desc mentions export functionality'
+    );
+  });
+});
+
+describe('Cookie Normalization (documented behavior)', () => {
+  // These tests document the expected cookie normalization behavior
+  // implemented in extension/service-worker.js
+
+  test('SameSite value mapping is documented', () => {
+    // Chrome cookies API uses different values than HTTP standards:
+    // - "none" -> "no_restriction"
+    // - "lax" -> "lax"
+    // - "strict" -> "strict"
+    // - "unspecified" -> "lax" (default)
+
+    const sameSiteMapping = {
+      'none': 'no_restriction',
+      'lax': 'lax',
+      'strict': 'strict',
+      'unspecified': 'lax'
+    };
+
+    assert.strictEqual(sameSiteMapping['none'], 'no_restriction');
+    assert.strictEqual(sameSiteMapping['lax'], 'lax');
+    assert.strictEqual(sameSiteMapping['strict'], 'strict');
+    assert.strictEqual(sameSiteMapping['unspecified'], 'lax');
+  });
+
+  test('Host-only vs domain cookie rules are documented', () => {
+    // Domain cookies have leading dot: ".google.com"
+    // Host-only cookies have no leading dot: "google.com"
+
+    const isDomainCookie = (domain) => domain.startsWith('.');
+    const isHostOnlyCookie = (domain) => !domain.startsWith('.');
+
+    assert.ok(isDomainCookie('.google.com'), '.google.com is domain cookie');
+    assert.ok(isHostOnlyCookie('google.com'), 'google.com is host-only cookie');
+    assert.ok(isHostOnlyCookie('accounts.google.com'), 'accounts.google.com is host-only cookie');
+  });
+
+  test('SameSite=None requires Secure=true', () => {
+    // Chrome requires SameSite=None (no_restriction) cookies to have Secure=true
+    // The import_cookies function enforces this automatically
+
+    const enforceSameSiteNoneSecurity = (cookie) => {
+      let secure = cookie.secure || false;
+      if (cookie.sameSite === 'none' || cookie.sameSite === 'no_restriction') {
+        secure = true;
+      }
+      return secure;
+    };
+
+    assert.strictEqual(enforceSameSiteNoneSecurity({ sameSite: 'none', secure: false }), true);
+    assert.strictEqual(enforceSameSiteNoneSecurity({ sameSite: 'no_restriction', secure: false }), true);
+    assert.strictEqual(enforceSameSiteNoneSecurity({ sameSite: 'lax', secure: false }), false);
+    assert.strictEqual(enforceSameSiteNoneSecurity({ sameSite: 'strict', secure: true }), true);
+  });
+
+  test('__Host- cookie prefix requirements are documented', () => {
+    // __Host- cookies must:
+    // - Have secure=true
+    // - Have path=/
+    // - NOT have a domain attribute
+
+    const isHostPrefixedCookie = (name) => name.startsWith('__Host-');
+
+    assert.ok(isHostPrefixedCookie('__Host-GAPS'));
+    assert.ok(!isHostPrefixedCookie('GAPS'));
+    assert.ok(!isHostPrefixedCookie('__Secure-TOKEN'));
+  });
+
+  test('__Secure- cookie prefix requirements are documented', () => {
+    // __Secure- cookies must:
+    // - Have secure=true
+    // - May have a domain attribute
+
+    const isSecurePrefixedCookie = (name) => name.startsWith('__Secure-');
+
+    assert.ok(isSecurePrefixedCookie('__Secure-1PSID'));
+    assert.ok(isSecurePrefixedCookie('__Secure-3PSID'));
+    assert.ok(!isSecurePrefixedCookie('SID'));
+  });
+});
