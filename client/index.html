@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Browser Task Executor - Client</title>
+  <title>Browser Automation Toolkit - Client</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; background: #f5f5f5; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; max-width: 1100px; margin: 0 auto; background: #f5f5f5; }
     h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
     .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     label { display: block; font-weight: 600; margin-bottom: 5px; }
@@ -13,40 +13,47 @@
     button { padding: 10px 20px; background: #4a90d9; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-top: 10px; }
     button:hover { background: #357abd; }
     button.secondary { background: #6c757d; }
+    button.small { padding: 6px 12px; font-size: 12px; margin: 2px; }
     pre { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px; font-size: 13px; }
     .success { color: #28a745; }
     .error { color: #dc3545; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
     #screenshot-preview { max-width: 100%; border: 1px solid #ccc; margin-top: 10px; display: none; }
+    .tool-desc { font-size: 12px; color: #666; margin-top: 4px; }
+    .category { margin-bottom: 15px; }
+    .category-title { font-weight: bold; color: #333; margin-bottom: 8px; padding: 5px; background: #e9ecef; border-radius: 4px; }
+    .search-box { margin-bottom: 15px; }
+    .search-box input { padding: 10px; font-size: 14px; }
+    .tool-count { font-size: 12px; color: #666; margin-left: 10px; }
+    .flex-row { display: flex; gap: 15px; }
+    .flex-row > div { flex: 1; }
+    optgroup { font-weight: bold; }
+    option { font-weight: normal; }
   </style>
 </head>
 <body>
-  <h1>Browser Task Executor - Client</h1>
+  <h1>Browser Automation Toolkit <span class="tool-count" id="toolCount"></span></h1>
 
   <div class="card" style="background: #e8f5e9; border-left: 4px solid #4caf50;">
     <strong>Server:</strong> <span id="serverStatus">Checking...</span>
-    <br><small>Command server must be running: <code>python3 command-server.py</code></small>
+    <br><small>Command server: <code>node server.js</code> | Extension must be loaded in Chrome</small>
   </div>
 
   <div class="card">
-    <label>Tool:</label>
-    <select id="tool" onchange="updateArgs()">
-      <option value="get_tabs">get_tabs - List all tabs</option>
-      <option value="read_page">read_page - Get accessibility tree</option>
-      <option value="screenshot">screenshot - Capture viewport</option>
-      <option value="navigate">navigate - Go to URL</option>
-      <option value="click">click - Click element</option>
-      <option value="type">type - Type text</option>
-      <option value="scroll">scroll - Scroll page</option>
-      <option value="execute_script">execute_script - Run JavaScript</option>
-      <option value="create_tab">create_tab - Open new tab</option>
-    </select>
+    <div class="flex-row">
+      <div>
+        <label>Tool:</label>
+        <select id="tool" onchange="updateArgs()"></select>
+        <div class="tool-desc" id="toolDesc"></div>
+      </div>
+      <div>
+        <label>Tab ID (optional):</label>
+        <input type="text" id="tabId" placeholder="Leave empty for active tab">
+      </div>
+    </div>
 
     <label style="margin-top: 15px;">Arguments (JSON):</label>
     <textarea id="args">{}</textarea>
-
-    <label style="margin-top: 15px;">Tab ID (optional):</label>
-    <input type="text" id="tabId" placeholder="Leave empty for active tab">
 
     <div>
       <button onclick="sendCommand()">Execute</button>
@@ -57,10 +64,18 @@
   <div class="card">
     <label>Quick Actions:</label>
     <div class="grid">
-      <button onclick="quickAction('get_tabs', {})">List Tabs</button>
-      <button onclick="quickAction('screenshot', {})">Screenshot</button>
-      <button onclick="quickAction('read_page', {filter: 'interactive'})">Read Page (Interactive)</button>
-      <button onclick="quickAction('navigate', {url: 'https://example.com'})">Go to Example.com</button>
+      <button class="small" onclick="quickAction('ping', {})">Ping</button>
+      <button class="small" onclick="quickAction('get_tabs', {})">List Tabs</button>
+      <button class="small" onclick="quickAction('screenshot', {})">Screenshot</button>
+      <button class="small" onclick="quickAction('get_url', {})">Get URL</button>
+      <button class="small" onclick="quickAction('get_title', {})">Get Title</button>
+      <button class="small" onclick="quickAction('read_page', {filter: 'interactive'})">Read Page</button>
+      <button class="small" onclick="quickAction('get_viewport', {})">Viewport</button>
+      <button class="small" onclick="quickAction('get_cookies', {})">Get Cookies</button>
+      <button class="small" onclick="quickAction('get_windows', {})">List Windows</button>
+      <button class="small" onclick="quickAction('get_frames', {})">List Frames</button>
+      <button class="small" onclick="quickAction('get_console_logs', {})">Console Logs</button>
+      <button class="small" onclick="quickAction('get_network_requests', {})">Network Requests</button>
     </div>
   </div>
 
@@ -71,21 +86,181 @@
   </div>
 
   <script>
+    const COMMAND_SERVER = 'http://127.0.0.1:8766';
+    let allTools = {};
+
+    // Tool categories for grouping
+    const CATEGORIES = {
+      'Navigation': ['navigate', 'reload'],
+      'Screenshots & Content': ['screenshot', 'screenshot_element', 'screenshot_full_page', 'read_page', 'get_html', 'get_text', 'save_pdf'],
+      'Element Interaction': ['click', 'type', 'fill', 'select', 'check', 'focus', 'blur', 'hover', 'set_attribute', 'remove_attribute', 'set_style'],
+      'DOM Manipulation': ['remove_element', 'hide_element', 'show_element', 'highlight_element', 'insert_html'],
+      'Keyboard & Mouse': ['press', 'keyboard', 'mouse', 'drag'],
+      'Scrolling': ['scroll', 'scroll_to', 'scroll_to_bottom', 'scroll_to_top', 'infinite_scroll'],
+      'Tabs': ['get_tabs', 'create_tab', 'close_tab', 'switch_tab', 'duplicate_tab'],
+      'Windows': ['get_windows', 'create_window', 'close_window', 'resize_window', 'move_window', 'maximize_window', 'minimize_window', 'fullscreen_window'],
+      'Wait': ['wait', 'wait_for', 'wait_for_navigation', 'wait_for_network_idle', 'poll_until'],
+      'Execute Script': ['execute_script', 'evaluate'],
+      'Session & Auth': ['save_session', 'restore_session', 'import_cookies', 'export_cookies'],
+      'Cookies': ['get_cookies', 'set_cookie', 'delete_cookies'],
+      'Storage': ['get_storage', 'set_storage', 'clear_storage'],
+      'Page Info': ['get_url', 'get_title', 'get_viewport'],
+      'Element Queries': ['find', 'find_all', 'find_by_text', 'get_element_info', 'get_bounding_box', 'count_elements', 'get_all_text', 'click_all'],
+      'Forms': ['fill_form', 'submit_form', 'get_form_data', 'clear_form'],
+      'Tables': ['get_table_data'],
+      'Frames': ['get_frames', 'switch_frame', 'switch_to_main'],
+      'Files': ['set_file', 'download', 'wait_for_download'],
+      'Dialogs': ['handle_dialog', 'get_dialog'],
+      'Console & Errors': ['get_console_logs', 'get_page_errors', 'clear_console_logs'],
+      'Network': ['get_network_requests', 'clear_network_requests', 'block_urls', 'unblock_urls', 'set_request_interception', 'mock_response', 'clear_mocks', 'wait_for_request', 'wait_for_response'],
+      'Device Emulation': ['set_user_agent', 'set_geolocation', 'clear_geolocation', 'emulate_device'],
+      'Clipboard': ['get_clipboard', 'set_clipboard'],
+      'Browser State': ['clear_cache', 'clear_browsing_data'],
+      'Assertions': ['assert_text', 'assert_visible', 'assert_hidden', 'assert_url', 'assert_title', 'assert_element_count'],
+      'Utility': ['ping', 'get_tools', 'retry']
+    };
+
+    // Default args for common tools
     const defaultArgs = {
-      get_tabs: {},
-      read_page: { filter: "interactive", depth: 10 },
-      screenshot: {},
       navigate: { url: "https://example.com" },
+      read_page: { filter: "interactive", depth: 10 },
       click: { ref: "ref_1" },
       type: { text: "Hello World", ref: "ref_1" },
+      fill: { ref: "ref_1", value: "test value" },
+      select: { ref: "ref_1", value: "option1" },
       scroll: { direction: "down", amount: 300 },
-      execute_script: { code: "document.title" },
-      create_tab: { url: "https://example.com" }
+      scroll_to: { ref: "ref_1" },
+      execute_script: { code: "return document.title" },
+      evaluate: { code: "return document.title" },
+      create_tab: { url: "https://example.com" },
+      switch_tab: { tabId: 1 },
+      close_tab: { tabId: 1 },
+      wait: { ms: 1000 },
+      wait_for: { selector: ".my-element", timeout: 5000 },
+      find: { selector: "button" },
+      find_all: { selector: "a", limit: 10 },
+      find_by_text: { text: "Click me", exact: false },
+      get_element_info: { ref: "ref_1" },
+      press: { key: "Enter" },
+      keyboard: { action: "press", key: "Tab" },
+      mouse: { action: "click", x: 100, y: 100 },
+      drag: { from: [100, 100], to: [200, 200] },
+      hover: { ref: "ref_1" },
+      set_attribute: { ref: "ref_1", name: "class", value: "active" },
+      set_style: { ref: "ref_1", property: "color", value: "red" },
+      highlight_element: { ref: "ref_1", color: "red", duration: 2000 },
+      insert_html: { ref: "ref_1", position: "afterend", html: "<p>New content</p>" },
+      fill_form: { fields: { "#email": "test@example.com", "#password": "secret" } },
+      get_storage: { type: "local" },
+      set_storage: { type: "local", key: "myKey", value: "myValue" },
+      clear_storage: { type: "local" },
+      set_cookie: { cookie: { url: "https://example.com", name: "test", value: "123" } },
+      import_cookies: { cookies: [], format: "json" },
+      export_cookies: { format: "json" },
+      block_urls: { patterns: ["ads", "tracking"] },
+      unblock_urls: { patterns: ["ads"] },
+      mock_response: { pattern: "api/test", response: { status: 200, body: "{}" } },
+      wait_for_request: { pattern: "api/", timeout: 5000 },
+      assert_text: { selector: "h1", expected: "Hello", contains: true },
+      assert_visible: { selector: ".my-element" },
+      assert_url: { expected: "example.com", contains: true },
+      assert_title: { expected: "Example", contains: true },
+      assert_element_count: { selector: "li", count: 5 },
+      poll_until: { code: "window.loaded === true", timeout: 10000 },
+      infinite_scroll: { maxScrolls: 10, delay: 1000 },
+      set_geolocation: { latitude: 37.7749, longitude: -122.4194 },
+      emulate_device: { device: "iPhone 12" },
+      set_clipboard: { text: "Copied text" },
+      resize_window: { width: 1280, height: 720 },
+      move_window: { x: 100, y: 100 },
+      handle_dialog: { action: "accept", text: "" },
+      switch_frame: { name: "myframe" },
+      download: { url: "https://example.com/file.pdf" },
+      retry: { tool: "find", args: { selector: "button" }, maxAttempts: 3, delay: 1000 },
+      clear_browsing_data: { dataTypes: ["cache", "cookies"] },
+      get_console_logs: { level: "all", clear: false },
+      get_network_requests: { filter: "", clear: false }
     };
+
+    async function loadTools() {
+      try {
+        const response = await fetch(`${COMMAND_SERVER}/tools`);
+        const data = await response.json();
+        allTools = data.tools;
+        document.getElementById('toolCount').textContent = `(${data.count} tools)`;
+        populateToolSelect();
+      } catch (e) {
+        console.error('Failed to load tools:', e);
+        document.getElementById('toolCount').textContent = '(failed to load)';
+      }
+    }
+
+    function populateToolSelect() {
+      const select = document.getElementById('tool');
+      select.innerHTML = '';
+
+      // Group tools by category
+      for (const [category, tools] of Object.entries(CATEGORIES)) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = category;
+
+        for (const toolName of tools) {
+          if (allTools[toolName]) {
+            const option = document.createElement('option');
+            option.value = toolName;
+            option.textContent = toolName;
+            optgroup.appendChild(option);
+          }
+        }
+
+        if (optgroup.children.length > 0) {
+          select.appendChild(optgroup);
+        }
+      }
+
+      // Add any uncategorized tools
+      const categorizedTools = Object.values(CATEGORIES).flat();
+      const uncategorized = Object.keys(allTools).filter(t => !categorizedTools.includes(t));
+      if (uncategorized.length > 0) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = 'Other';
+        for (const toolName of uncategorized) {
+          const option = document.createElement('option');
+          option.value = toolName;
+          option.textContent = toolName;
+          optgroup.appendChild(option);
+        }
+        select.appendChild(optgroup);
+      }
+
+      updateArgs();
+    }
 
     function updateArgs() {
       const tool = document.getElementById('tool').value;
-      document.getElementById('args').value = JSON.stringify(defaultArgs[tool] || {}, null, 2);
+      const toolInfo = allTools[tool];
+
+      // Show description
+      if (toolInfo) {
+        document.getElementById('toolDesc').textContent = toolInfo.desc || '';
+      }
+
+      // Set default args
+      if (defaultArgs[tool]) {
+        document.getElementById('args').value = JSON.stringify(defaultArgs[tool], null, 2);
+      } else if (toolInfo && toolInfo.args) {
+        // Generate empty args object from tool definition
+        const args = {};
+        for (const arg of toolInfo.args) {
+          const argName = arg.replace('?', '');
+          if (!arg.endsWith('?')) {
+            args[argName] = '';
+          }
+        }
+        document.getElementById('args').value = JSON.stringify(args, null, 2);
+      } else {
+        document.getElementById('args').value = '{}';
+      }
     }
 
     function clearResult() {
@@ -96,10 +271,10 @@
     function quickAction(tool, args) {
       document.getElementById('tool').value = tool;
       document.getElementById('args').value = JSON.stringify(args, null, 2);
+      updateArgs();
+      document.getElementById('args').value = JSON.stringify(args, null, 2);
       sendCommand();
     }
-
-    const COMMAND_SERVER = 'http://127.0.0.1:8766';
 
     async function sendCommand() {
       const tool = document.getElementById('tool').value;
@@ -116,11 +291,10 @@
       const command = { tool, args };
       if (tabId) command.tabId = parseInt(tabId);
 
-      document.getElementById('result').textContent = 'Sending command to server...';
+      document.getElementById('result').textContent = 'Sending command...';
       document.getElementById('screenshot-preview').style.display = 'none';
 
       try {
-        console.log('[Client] Sending command via HTTP:', command);
         const response = await fetch(`${COMMAND_SERVER}/command`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -128,36 +302,39 @@
         });
 
         const result = await response.json();
-        console.log('[Client] Received result:', result);
         showResult(result, tool);
       } catch (e) {
-        console.error('[Client] Error:', e);
-        showResult({ error: `Server error: ${e.message}. Is command-server.py running?` }, tool);
+        showResult({ error: `Server error: ${e.message}. Is server.js running?` }, tool);
       }
     }
 
     function showResult(response, tool) {
-      if (tool === 'screenshot' && response?.result?.image) {
-        document.getElementById('screenshot-preview').src = response.result.image;
-        document.getElementById('screenshot-preview').style.display = 'block';
+      const preview = document.getElementById('screenshot-preview');
+
+      // Handle screenshot
+      if (tool.includes('screenshot') && response?.result?.image) {
+        preview.src = response.result.image;
+        preview.style.display = 'block';
         const displayResult = { ...response };
         displayResult.result = { ...response.result, image: '[base64 image - shown below]' };
         document.getElementById('result').innerHTML = '<span class="success">Success!</span>\n' + JSON.stringify(displayResult, null, 2);
       } else if (response?.error) {
-        document.getElementById('result').innerHTML = '<span class="error">Error: ' + response.error + '</span>';
+        preview.style.display = 'none';
+        document.getElementById('result').innerHTML = '<span class="error">Error: ' + response.error + '</span>\n' + JSON.stringify(response, null, 2);
       } else {
+        preview.style.display = 'none';
         const status = response?.success ? '<span class="success">Success!</span>' : '<span class="error">Failed</span>';
         document.getElementById('result').innerHTML = status + '\n' + JSON.stringify(response, null, 2);
       }
     }
 
-    // Check server status
     async function checkServerStatus() {
       const statusEl = document.getElementById('serverStatus');
       try {
         const response = await fetch(`${COMMAND_SERVER}/`, { method: 'GET' });
         if (response.ok) {
-          statusEl.innerHTML = '<span style="color: green;">✓ Connected</span>';
+          const data = await response.json();
+          statusEl.innerHTML = `<span style="color: green;">✓ Connected (v${data.version || '?'})</span>`;
         } else {
           statusEl.innerHTML = '<span style="color: red;">✗ Server error</span>';
         }
@@ -167,7 +344,7 @@
     }
 
     // Initialize
-    updateArgs();
+    loadTools();
     checkServerStatus();
     setInterval(checkServerStatus, 5000);
   </script>
