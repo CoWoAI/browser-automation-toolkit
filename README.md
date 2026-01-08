@@ -2,13 +2,14 @@
 
 Control Chrome via HTTP API through a browser extension. Simple, fast, no WebDriver required.
 
-**v2.0.0** - Now with 80+ tools for complete browser automation.
+**v2.1.0** - Now with 117 tools, Docker support, batch commands, and subtaskId for multi-browser routing.
 
 ## Quick Start
 
 ```bash
 # 1. Start the server
-node server.js
+node server.js              # Local
+docker-compose up -d        # Docker
 
 # 2. Load extension in Chrome
 #    - Go to chrome://extensions
