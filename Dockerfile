@@ -1,7 +1,7 @@
 # Browser Automation Toolkit - Docker Image
 # This runs the command server that bridges external tools with Chrome extension
 
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 

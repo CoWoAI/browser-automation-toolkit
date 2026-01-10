@@ -4,13 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Browser Automation Toolkit v2.1.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
+Browser Automation Toolkit v2.2.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
 
 ```
 Your App → POST /command → server.js (8766) → Extension polls (configurable) → Chrome → Result
 ```
 
-**New in v2.1.0:**
+**New in v2.2.0:**
+- Modular ES module architecture for extension service worker
+- 117 tools split into 29 category modules
+- Centralized state management
+- Shared utility modules
+
+**v2.1.0 features:**
 - SubtaskID support for future multi-browser routing
 - Batch commands endpoint (`POST /commands`)
 - Docker deployment support
@@ -41,8 +47,45 @@ browser-automation-toolkit/
 ├── tests/
 │   └── server.test.js        # Comprehensive server tests
 ├── extension/
-│   ├── manifest.json         # Manifest V3, broad permissions
-│   ├── service-worker.js     # Tool handlers + HTTP polling + settings
+│   ├── manifest.json         # Manifest V3, ES module service worker
+│   ├── service-worker.js     # Entry point (~130 lines) - imports tool modules
+│   ├── service-worker-legacy.js  # Pre-modular version (backup)
+│   ├── tools/                # Tool category modules (29 files)
+│   │   ├── index.js          # Tool registry, exports all tools
+│   │   ├── navigation.js     # navigate, reload
+│   │   ├── screenshots.js    # screenshot, read_page, get_html, get_text
+│   │   ├── interaction.js    # click, type, fill, select, check, focus, hover
+│   │   ├── dom.js            # remove_element, hide_element, highlight_element
+│   │   ├── keyboard.js       # press, keyboard
+│   │   ├── mouse.js          # mouse, drag
+│   │   ├── scrolling.js      # scroll, scroll_to, infinite_scroll
+│   │   ├── tabs.js           # get_tabs, create_tab, close_tab, switch_tab
+│   │   ├── windows.js        # get_windows, create_window, resize_window
+│   │   ├── wait.js           # wait, wait_for, wait_for_navigation
+│   │   ├── scripts.js        # execute_script, evaluate
+│   │   ├── session.js        # save_session, restore_session
+│   │   ├── cookies.js        # import_cookies, export_cookies, get_cookies
+│   │   ├── storage.js        # get_storage, set_storage, clear_storage
+│   │   ├── page-info.js      # get_url, get_title, get_viewport
+│   │   ├── queries.js        # find, find_all, find_by_text, get_element_info
+│   │   ├── forms.js          # fill_form, submit_form, get_form_data
+│   │   ├── tables.js         # get_table_data
+│   │   ├── frames.js         # get_frames, switch_frame, switch_to_main
+│   │   ├── files.js          # download, wait_for_download
+│   │   ├── dialogs.js        # handle_dialog, get_dialog
+│   │   ├── console.js        # get_console_logs, get_page_errors
+│   │   ├── network.js        # get_network_requests, block_urls, mock_response
+│   │   ├── device.js         # set_user_agent, emulate_device
+│   │   ├── clipboard.js      # get_clipboard, set_clipboard
+│   │   ├── browser.js        # clear_cache, clear_browsing_data
+│   │   ├── assertions.js     # assert_text, assert_visible, assert_url
+│   │   └── utility.js        # ping, get_tools, retry
+│   ├── utils/                # Shared utilities
+│   │   ├── tab-utils.js      # getActiveTab, getWindow
+│   │   ├── content-script.js # ensureContentScript, exec
+│   │   └── cookie-format.js  # parseNetscapeCookies, toNetscapeFormat
+│   ├── state/                # Centralized state management
+│   │   └── index.js          # Console logs, network requests, mock responses
 │   ├── content/
 │   │   └── accessibility-tree.js  # DOM interaction + ref system
 │   └── popup/                # Extension popup UI (tabbed)
@@ -129,23 +172,41 @@ Cookies should include a `url` field for reliable import. If missing, URL is con
    }
    ```
 
-2. Add handler in `tools` object in `extension/service-worker.js`:
+2. Create or add to appropriate category module in `extension/tools/`:
    ```javascript
-   async my_tool({ param1, param2 = 'default' }, tabId) {
+   // extension/tools/my-category.js
+   import { ensureContentScript, exec } from '../utils/content-script.js';
+
+   export async function my_tool({ param1, param2 = 'default' }, tabId) {
      // Implementation
      return { success: true, result: {...} };
    }
    ```
 
-3. If tool needs DOM access:
+3. Export from `extension/tools/index.js`:
    ```javascript
-   await ensureContentScript(tabId);
-   return await exec(tabId, (p1, p2) => {
-     // Runs in page context
-   }, [param1, param2]);
+   import { my_tool } from './my-category.js';
+
+   export const tools = {
+     // ... existing tools
+     my_tool,
+   };
    ```
 
-4. If tool needs active tab, add to `tabRequiredTools` array in service-worker.js
+4. If tool needs DOM access, use the content-script utilities:
+   ```javascript
+   import { ensureContentScript, exec } from '../utils/content-script.js';
+
+   export async function my_tool({ param }, tabId) {
+     await ensureContentScript(tabId);
+     return await exec(tabId, (p) => {
+       // Runs in page context
+       return { success: true, data: p };
+     }, [param]);
+   }
+   ```
+
+5. If tool needs active tab, add to `tabRequiredTools` array in `extension/tools/index.js`
 
 ## Tool Categories (80+ tools)
 
