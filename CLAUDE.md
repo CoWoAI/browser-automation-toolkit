@@ -352,6 +352,9 @@ docker run -p 8766:8766 browser-automation-toolkit
 
 **Note:** The server runs in Docker, but the Chrome extension runs in your browser. Configure the extension's server URL to point to the Docker container.
 
+**Volume Mount:**
+- `./data:/app/data` - Logs persist in `data/logs.jsonl` across container restarts
+
 **Environment Variables:**
 - `PORT`: Server port (default: 8766)
 - `COMMAND_TIMEOUT`: Command timeout in ms (default: 30000)
