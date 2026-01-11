@@ -8,17 +8,23 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (none for this project, but future-proofs)
-RUN npm ci --production --ignore-scripts 2>/dev/null || true
+# Install dependencies
+RUN npm ci --production --ignore-scripts 2>/dev/null || npm install --production
 
-# Copy server code
+# Copy application code
 COPY server.js ./
+COPY src/ ./src/
+COPY migrations/ ./migrations/
+
+# Create data directory
+RUN mkdir -p /app/data
 
 # Expose the default port
 EXPOSE 8766
 
 # Environment variables
 ENV PORT=8766
+ENV HOST=0.0.0.0
 ENV COMMAND_TIMEOUT=30000
 
 # Health check

@@ -55,7 +55,16 @@ function handleRequest(req, res) {
   // API: Status (JSON)
   if (req.method === 'GET' && url.pathname === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.2.0', uptime: 0, tools: 2, logs: testLogs.length }));
+    res.end(JSON.stringify({
+      status: 'ok',
+      name: 'browser-automation-toolkit',
+      version: '2.3.0',
+      uptime: 0,
+      tools: 2,
+      logs: testLogs.length,
+      storage: 'file',
+      database: { connected: false, configured: false }
+    }));
     return;
   }
 
@@ -223,17 +232,22 @@ describe('Server HTTP Endpoints', () => {
     assert.ok(html.includes('/tools'));
   });
 
-  test('GET /api/status returns health check with version', async () => {
+  test('GET /api/status returns health check with version and storage info', async () => {
     const res = await fetch(`${BASE_URL}/api/status`);
     assert.strictEqual(res.status, 200);
 
     const data = await res.json();
     assert.strictEqual(data.status, 'ok');
     assert.strictEqual(data.name, 'browser-automation-toolkit');
-    assert.strictEqual(data.version, '2.2.0');
+    assert.strictEqual(data.version, '2.3.0');
     assert.ok(typeof data.uptime === 'number');
     assert.ok(typeof data.tools === 'number');
     assert.ok(typeof data.logs === 'number');
+    // New storage fields
+    assert.ok(data.storage === 'file' || data.storage === 'postgres');
+    assert.ok(typeof data.database === 'object');
+    assert.ok(typeof data.database.connected === 'boolean');
+    assert.ok(typeof data.database.configured === 'boolean');
   });
 
   test('GET /tools returns HTML tools page', async () => {

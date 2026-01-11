@@ -4,23 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Browser Automation Toolkit v2.2.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
+Browser Automation Toolkit v2.3.0 - Control Chrome via HTTP API through a browser extension. No WebDriver required.
 
 ```
 Your App → POST /command → server.js (8766) → Extension polls (configurable) → Chrome → Result
 ```
 
-**New in v2.2.0:**
-- **Server-side logging**: Extension errors sent to server instead of console
-- **Web UI dashboard**: Menu at `/` with links to logs, tools, status
-- **Logs viewer**: `/logs` page with filtering, search, export
-- **Tools reference**: `/tools` HTML page with categorized tool docs
-- **API restructure**: JSON APIs moved to `/api/*` endpoints
-- **Logger utility**: `extension/utils/logger.js` for server-side logging
+**New in v2.3.0:**
+- **PostgreSQL storage**: Logs stored in PostgreSQL database (with file fallback)
+- **Connection pooling**: Database connection pool (max 25, min 5 connections)
+- **Docker-only testing**: All tests run via Docker Compose
+- **Database status**: `/api/status` includes `storage` and `database` fields
+- **Graceful shutdown**: Proper cleanup of database connections
+
+**v2.2.0 features:**
+- Server-side logging: Extension errors sent to server
+- Web UI dashboard: Menu at `/` with links to logs, tools, status
+- Logs viewer: `/logs` page with filtering, search, export
+- Tools reference: `/tools` HTML page with categorized tool docs
+- API restructure: JSON APIs moved to `/api/*` endpoints
+- Logger utility: `extension/utils/logger.js` for server-side logging
 - Modular ES module architecture for extension service worker
 - 117 tools split into 29 category modules
-- Centralized state management
-- Shared utility modules
 
 **v2.1.0 features:**
 - SubtaskID support for future multi-browser routing
@@ -31,14 +36,19 @@ Your App → POST /command → server.js (8766) → Extension polls (configurabl
 ## Commands
 
 ```bash
-# Start server
-node server.js               # Port 8766
+# Start with Docker (recommended)
+docker compose up -d                    # Start server + PostgreSQL
+docker compose logs -f                  # View logs
+docker compose down                     # Stop services
 
-# Run tests
-npm test                     # Node.js built-in test runner
+# Run tests (Docker only)
+docker compose run --rm test            # Run all tests
 
-# Start client UI (optional)
-cd client && python3 server.py   # Port 8080
+# Start locally (file-based storage)
+node server.js                          # Port 8766, no database
+
+# Start locally with PostgreSQL
+DATABASE_URL=postgres://user:pass@localhost:5434/browser_toolkit node server.js
 
 # Load extension
 # chrome://extensions → Developer mode → Load unpacked → extension/
@@ -49,11 +59,25 @@ cd client && python3 server.py   # Port 8080
 ```
 browser-automation-toolkit/
 ├── server.js                 # Node.js HTTP command server (117 tools + web UI)
-├── package.json              # Node.js project config (no dependencies)
-├── data/                     # Data directory (gitignored)
-│   └── logs.jsonl            # Server-side logs (JSONL format)
+├── package.json              # Node.js project config (pg dependency)
+├── docker-compose.yml        # Docker services (server + PostgreSQL + test)
+├── Dockerfile                # Server container image
+├── src/
+│   ├── config.js             # Environment configuration
+│   ├── database/
+│   │   ├── postgres.js       # Connection pool wrapper
+│   │   └── migrate.js        # Migration runner
+│   └── repositories/
+│       └── log-repository.js # Log data access layer
+├── migrations/
+│   ├── 001_create_logs.sql   # Logs table schema
+│   └── init.sql              # Combined schema for Docker init
+├── data/                     # Data directory (gitignored, fallback storage)
+│   └── logs.jsonl            # File-based logs (when no DATABASE_URL)
 ├── tests/
-│   └── server.test.js        # Comprehensive server tests (42 tests)
+│   ├── server.test.js        # Server endpoint tests
+│   ├── database.test.js      # Database connection tests
+│   └── repository.test.js    # Log repository tests
 ├── extension/
 │   ├── manifest.json         # Manifest V3, ES module service worker
 │   ├── service-worker.js     # Entry point (~130 lines) - imports tool modules
@@ -342,42 +366,60 @@ Use `"ref": "$prev"` to reference the result of the previous command:
 ## Docker Deployment
 
 ```bash
-# Build and run with Docker Compose
-docker-compose up -d
+# Start all services (server + PostgreSQL)
+docker compose up -d
 
-# Or build manually
-docker build -t browser-automation-toolkit .
-docker run -p 8766:8766 browser-automation-toolkit
+# View logs
+docker compose logs -f browser-toolkit
+
+# Stop services
+docker compose down
+
+# Run tests
+docker compose run --rm test
 ```
 
 **Note:** The server runs in Docker, but the Chrome extension runs in your browser. Configure the extension's server URL to point to the Docker container.
 
-**Volume Mount:**
-- `./data:/app/data` - Logs persist in `data/logs.jsonl` across container restarts
+**Services:**
+- `browser-toolkit`: Main server (port 8766)
+- `postgres`: PostgreSQL database (port 5434 externally)
+- `test`: Test runner (profile: test)
 
 **Environment Variables:**
-- `PORT`: Server port (default: 8766)
-- `COMMAND_TIMEOUT`: Command timeout in ms (default: 30000)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 8766 | Server port |
+| `HOST` | 127.0.0.1 | Bind address (0.0.0.0 for Docker) |
+| `COMMAND_TIMEOUT` | 30000 | Command timeout in ms |
+| `DATABASE_URL` | (none) | PostgreSQL connection string |
+| `LOG_RETENTION_DAYS` | 30 | Days to keep logs |
+
+**Storage Modes:**
+- With `DATABASE_URL`: Uses PostgreSQL (persistent, queryable)
+- Without `DATABASE_URL`: Falls back to `data/logs.jsonl` file
 
 ## Testing
 
-Tests use Node.js built-in test runner (requires Node 18+):
+All tests run via Docker to ensure PostgreSQL is available:
 
 ```bash
-npm test
+# Run all tests
+docker compose run --rm test
+
+# View test output
+docker compose run --rm test 2>&1 | head -100
 ```
 
-Tests cover (42 tests total):
+Tests cover:
+- Database connection and pool management
+- Log repository CRUD operations
+- Server endpoints with database integration
+- Fallback behavior when database unavailable
 - Web UI endpoints (/, /logs, /tools - HTML)
 - API endpoints (/api/status, /api/tools, /api/logs - JSON)
-- Logging endpoints (POST /log, DELETE /api/logs)
 - Command endpoints (/command, /commands, /result)
-- Server-side tools (ping, get_tools)
-- Command queuing and result handling
-- Batch commands execution and error handling
-- SubtaskID propagation
-- Timeout behavior
-- CORS headers
+- Batch commands and SubtaskID propagation
 - Tool definitions validation (117 tools)
 
 ## Security Notes

@@ -11,13 +11,21 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } fr
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
+// Database imports
+import { db } from './src/database/postgres.js';
+import { logRepository } from './src/repositories/log-repository.js';
+import config from './src/config.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const PORT = process.env.PORT || 8766;
-const HOST = process.env.HOST || '127.0.0.1';  // Use 0.0.0.0 for Docker
-const TIMEOUT_MS = parseInt(process.env.COMMAND_TIMEOUT) || 30000;
-const MAX_LOGS_IN_MEMORY = 1000;
+const PORT = config.port;
+const HOST = config.host;
+const TIMEOUT_MS = config.commandTimeout;
+const MAX_LOGS_IN_MEMORY = config.maxLogsInMemory;
 const LOGS_FILE = join(__dirname, 'data', 'logs.jsonl');
+
+// Database state
+let useDatabase = false;
 
 // State
 let pendingCommand = null;
@@ -31,8 +39,27 @@ const subtaskBrowserMap = new Map();
 // Logs storage
 const logs = [];
 
-// Initialize logs from file
-function initLogs() {
+// Initialize logs - try database first, fallback to file
+async function initLogs() {
+  // Try database connection
+  if (config.databaseUrl) {
+    try {
+      const connected = await db.connect(config.databaseUrl);
+      if (connected) {
+        useDatabase = true;
+        const count = await logRepository.count();
+        console.log(`Using PostgreSQL storage (${count} logs in database)`);
+        return;
+      }
+    } catch (e) {
+      console.error('Database init failed:', e.message);
+    }
+  }
+
+  // Fallback to file storage
+  useDatabase = false;
+  console.log('Using file-based storage');
+
   const dataDir = join(__dirname, 'data');
   if (!existsSync(dataDir)) {
     mkdirSync(dataDir, { recursive: true });
@@ -57,8 +84,19 @@ function initLogs() {
   }
 }
 
-// Add log entry
-function addLog(entry) {
+// Add log entry - uses database if available, fallback to file
+async function addLog(entry) {
+  // Try database first
+  if (useDatabase) {
+    try {
+      return await logRepository.create(entry);
+    } catch (e) {
+      console.error('Database log failed, using file fallback:', e.message);
+      // Fall through to file storage
+    }
+  }
+
+  // File/memory fallback
   const log = {
     id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     timestamp: new Date().toISOString(),
@@ -81,8 +119,19 @@ function addLog(entry) {
   return log;
 }
 
-// Clear logs
-function clearLogs() {
+// Clear logs - uses database if available, fallback to file
+async function clearLogs() {
+  if (useDatabase) {
+    try {
+      await logRepository.deleteAll();
+      return;
+    } catch (e) {
+      console.error('Database clear failed:', e.message);
+      // Fall through to file storage
+    }
+  }
+
+  // File/memory fallback
   logs.length = 0;
   try {
     writeFileSync(LOGS_FILE, '');
@@ -91,8 +140,18 @@ function clearLogs() {
   }
 }
 
-// Get unique values for filtering
-function getLogFilters() {
+// Get unique values for filtering - uses database if available
+async function getLogFilters() {
+  if (useDatabase) {
+    try {
+      return await logRepository.getFilters();
+    } catch (e) {
+      console.error('Database getFilters failed:', e.message);
+      // Fall through to file storage
+    }
+  }
+
+  // File/memory fallback
   const levels = new Set();
   const tools = new Set();
   for (const log of logs) {
@@ -637,7 +696,7 @@ const TOOLS = {
 };
 
 // HTML Templates
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 
 function getMenuHTML() {
   const uptime = Math.floor((Date.now() - startTime) / 1000);
@@ -1243,7 +1302,7 @@ function getToolsHTML() {
 </html>`;
 }
 
-function handleRequest(req, res) {
+async function handleRequest(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1281,6 +1340,17 @@ function handleRequest(req, res) {
   // API: Status (JSON)
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const uptime = Math.floor((Date.now() - startTime) / 1000);
+    let logCount = logs.length;
+
+    // Get log count from database if using it
+    if (useDatabase) {
+      try {
+        logCount = await logRepository.count();
+      } catch (e) {
+        // Fallback to memory count
+      }
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
@@ -1288,7 +1358,12 @@ function handleRequest(req, res) {
       version: VERSION,
       uptime,
       tools: Object.keys(TOOLS).length,
-      logs: logs.length
+      logs: logCount,
+      storage: useDatabase ? 'postgres' : 'file',
+      database: {
+        connected: db.isConnected(),
+        configured: !!config.databaseUrl
+      }
     }));
     return;
   }
@@ -1308,46 +1383,67 @@ function handleRequest(req, res) {
     const since = url.searchParams.get('since');
     const limit = parseInt(url.searchParams.get('limit')) || 100;
 
-    let filtered = logs;
+    try {
+      let result, total, filters;
 
-    if (level) {
-      filtered = filtered.filter(log => log.level === level);
-    }
-    if (tool) {
-      filtered = filtered.filter(log => log.tool === tool);
-    }
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filtered = filtered.filter(log =>
-        (log.message && log.message.toLowerCase().includes(searchLower)) ||
-        (log.tool && log.tool.toLowerCase().includes(searchLower))
-      );
-    }
-    if (since) {
-      const sinceDate = new Date(since);
-      filtered = filtered.filter(log => new Date(log.timestamp) >= sinceDate);
-    }
+      if (useDatabase) {
+        // Use database
+        result = await logRepository.findMany({ level, tool, search, since, limit });
+        total = await logRepository.count();
+        filters = await logRepository.getFilters();
+      } else {
+        // File/memory fallback
+        let filtered = logs;
 
-    // Get last N logs
-    const result = filtered.slice(-limit);
-    const filters = getLogFilters();
+        if (level) {
+          filtered = filtered.filter(log => log.level === level);
+        }
+        if (tool) {
+          filtered = filtered.filter(log => log.tool === tool);
+        }
+        if (search) {
+          const searchLower = search.toLowerCase();
+          filtered = filtered.filter(log =>
+            (log.message && log.message.toLowerCase().includes(searchLower)) ||
+            (log.tool && log.tool.toLowerCase().includes(searchLower))
+          );
+        }
+        if (since) {
+          const sinceDate = new Date(since);
+          filtered = filtered.filter(log => new Date(log.timestamp) >= sinceDate);
+        }
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      logs: result,
-      count: result.length,
-      total: logs.length,
-      levels: filters.levels,
-      tools: filters.tools
-    }));
+        // Get last N logs
+        result = filtered.slice(-limit);
+        total = logs.length;
+        filters = await getLogFilters();
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        logs: result,
+        count: result.length,
+        total,
+        levels: filters.levels,
+        tools: filters.tools
+      }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
   // API: Delete logs
   if (req.method === 'DELETE' && url.pathname === '/api/logs') {
-    clearLogs();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: true, message: 'Logs cleared' }));
+    try {
+      await clearLogs();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: 'Logs cleared' }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
@@ -1355,10 +1451,10 @@ function handleRequest(req, res) {
   if (req.method === 'POST' && url.pathname === '/log') {
     let body = '';
     req.on('data', chunk => body += chunk);
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const entry = JSON.parse(body);
-        const log = addLog(entry);
+        const log = await addLog(entry);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, id: log.id }));
       } catch (e) {
@@ -1575,31 +1671,47 @@ function handleRequest(req, res) {
 
 const server = createServer(handleRequest);
 
+// Graceful shutdown
+async function shutdown() {
+  console.log('\nShutting down...');
+  server.close();
+  if (db.isConnected()) {
+    await db.close();
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
 // Only start if run directly (not imported)
 const isMainModule = import.meta.url === `file://${process.argv[1]}`;
 if (isMainModule) {
-  // Initialize logs from file
-  initLogs();
+  // Initialize logs (async - tries database first)
+  (async () => {
+    await initLogs();
 
-  server.listen(PORT, HOST, () => {
-    console.log(`Browser Automation Toolkit v${VERSION} - Command Server`);
-    console.log(`Listening on http://${HOST}:${PORT}`);
-    console.log(`Tools available: ${Object.keys(TOOLS).length}`);
-    console.log(`Command timeout: ${TIMEOUT_MS}ms`);
-    console.log('');
-    console.log('Web UI:');
-    console.log(`  http://${HOST}:${PORT}/        - Dashboard`);
-    console.log(`  http://${HOST}:${PORT}/logs    - Logs viewer`);
-    console.log(`  http://${HOST}:${PORT}/tools   - Tools reference`);
-    console.log('');
-    console.log('API Endpoints:');
-    console.log(`  GET  /api/status  - Server status (JSON)`);
-    console.log(`  GET  /api/tools   - List all tools (JSON)`);
-    console.log(`  GET  /api/logs    - Get logs with filtering (JSON)`);
-    console.log(`  POST /log         - Submit log from extension`);
-    console.log(`  POST /command     - Send single command`);
-    console.log(`  POST /commands    - Send batch commands`);
-  });
+    server.listen(PORT, HOST, () => {
+      console.log(`Browser Automation Toolkit v${VERSION} - Command Server`);
+      console.log(`Listening on http://${HOST}:${PORT}`);
+      console.log(`Tools available: ${Object.keys(TOOLS).length}`);
+      console.log(`Command timeout: ${TIMEOUT_MS}ms`);
+      console.log(`Storage: ${useDatabase ? 'PostgreSQL' : 'file-based'}`);
+      console.log('');
+      console.log('Web UI:');
+      console.log(`  http://${HOST}:${PORT}/        - Dashboard`);
+      console.log(`  http://${HOST}:${PORT}/logs    - Logs viewer`);
+      console.log(`  http://${HOST}:${PORT}/tools   - Tools reference`);
+      console.log('');
+      console.log('API Endpoints:');
+      console.log(`  GET  /api/status  - Server status (JSON)`);
+      console.log(`  GET  /api/tools   - List all tools (JSON)`);
+      console.log(`  GET  /api/logs    - Get logs with filtering (JSON)`);
+      console.log(`  POST /log         - Submit log from extension`);
+      console.log(`  POST /command     - Send single command`);
+      console.log(`  POST /commands    - Send batch commands`);
+    });
+  })();
 }
 
-export { server, TOOLS, addLog, logs };
+export { server, TOOLS, addLog, logs, initLogs, useDatabase, db };
