@@ -14,10 +14,13 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 let server;
 let pendingCommand = null;
 let resultResolve = null;
+let testLogs = [];
+
+const MOCK_TOOLS = { ping: { args: [], desc: 'Health check' }, get_tabs: { args: [], desc: 'List tabs' } };
 
 function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -28,15 +31,74 @@ function handleRequest(req, res) {
 
   const url = new URL(req.url, BASE_URL);
 
+  // Root - HTML dashboard
   if (req.method === 'GET' && url.pathname === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.1.0' }));
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>Browser Automation Toolkit<a href="/logs">/logs</a><a href="/tools">/tools</a></body></html>');
     return;
   }
 
+  // Logs viewer - HTML
+  if (req.method === 'GET' && url.pathname === '/logs') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>Logs</body></html>');
+    return;
+  }
+
+  // Tools reference - HTML
   if (req.method === 'GET' && url.pathname === '/tools') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>Tools - 2 tools available</body></html>');
+    return;
+  }
+
+  // API: Status (JSON)
+  if (req.method === 'GET' && url.pathname === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ tools: { ping: { args: [], desc: 'Health check' }, get_tabs: { args: [], desc: 'List tabs' } }, count: 2 }));
+    res.end(JSON.stringify({ status: 'ok', name: 'browser-automation-toolkit', version: '2.2.0', uptime: 0, tools: 2, logs: testLogs.length }));
+    return;
+  }
+
+  // API: Tools (JSON)
+  if (req.method === 'GET' && url.pathname === '/api/tools') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ tools: MOCK_TOOLS, count: Object.keys(MOCK_TOOLS).length }));
+    return;
+  }
+
+  // API: Get logs (JSON)
+  if (req.method === 'GET' && url.pathname === '/api/logs') {
+    const levels = [...new Set(testLogs.map(l => l.level).filter(Boolean))];
+    const tools = [...new Set(testLogs.map(l => l.tool).filter(Boolean))];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ logs: testLogs, count: testLogs.length, total: testLogs.length, levels, tools }));
+    return;
+  }
+
+  // API: Delete logs
+  if (req.method === 'DELETE' && url.pathname === '/api/logs') {
+    testLogs = [];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, message: 'Logs cleared' }));
+    return;
+  }
+
+  // API: Receive log
+  if (req.method === 'POST' && url.pathname === '/log') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const entry = JSON.parse(body);
+        const log = { id: `log_${Date.now()}`, timestamp: new Date().toISOString(), ...entry };
+        testLogs.push(log);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, id: log.id }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      }
+    });
     return;
   }
 
@@ -147,26 +209,116 @@ describe('Server HTTP Endpoints', () => {
   beforeEach(() => {
     pendingCommand = null;
     resultResolve = null;
+    testLogs = [];
   });
 
-  test('GET / returns health check with version', async () => {
+  test('GET / returns HTML dashboard page', async () => {
     const res = await fetch(`${BASE_URL}/`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.headers.get('content-type').includes('text/html'));
+
+    const html = await res.text();
+    assert.ok(html.includes('Browser Automation Toolkit'));
+    assert.ok(html.includes('/logs'));
+    assert.ok(html.includes('/tools'));
+  });
+
+  test('GET /api/status returns health check with version', async () => {
+    const res = await fetch(`${BASE_URL}/api/status`);
     assert.strictEqual(res.status, 200);
 
     const data = await res.json();
     assert.strictEqual(data.status, 'ok');
     assert.strictEqual(data.name, 'browser-automation-toolkit');
-    assert.strictEqual(data.version, '2.1.0');
+    assert.strictEqual(data.version, '2.2.0');
+    assert.ok(typeof data.uptime === 'number');
+    assert.ok(typeof data.tools === 'number');
+    assert.ok(typeof data.logs === 'number');
   });
 
-  test('GET /tools returns tools list with count', async () => {
+  test('GET /tools returns HTML tools page', async () => {
     const res = await fetch(`${BASE_URL}/tools`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.headers.get('content-type').includes('text/html'));
+
+    const html = await res.text();
+    assert.ok(html.includes('Tools'));
+    assert.ok(html.includes('tools available'));
+  });
+
+  test('GET /api/tools returns tools list with count (JSON)', async () => {
+    const res = await fetch(`${BASE_URL}/api/tools`);
     assert.strictEqual(res.status, 200);
 
     const data = await res.json();
     assert.ok(data.tools);
     assert.ok(typeof data.count === 'number');
     assert.ok('ping' in data.tools);
+  });
+
+  test('GET /logs returns HTML logs page', async () => {
+    const res = await fetch(`${BASE_URL}/logs`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.headers.get('content-type').includes('text/html'));
+
+    const html = await res.text();
+    assert.ok(html.includes('Logs'));
+  });
+
+  test('GET /api/logs returns logs list with filters', async () => {
+    const res = await fetch(`${BASE_URL}/api/logs`);
+    assert.strictEqual(res.status, 200);
+
+    const data = await res.json();
+    assert.ok(Array.isArray(data.logs));
+    assert.ok(typeof data.total === 'number');
+    assert.ok(Array.isArray(data.levels));
+    assert.ok(Array.isArray(data.tools));
+  });
+
+  test('POST /log receives and stores log entry', async () => {
+    const logEntry = {
+      level: 'error',
+      message: 'Test error message',
+      tool: 'test_tool'
+    };
+
+    const res = await fetch(`${BASE_URL}/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logEntry)
+    });
+    assert.strictEqual(res.status, 200);
+
+    const data = await res.json();
+    assert.strictEqual(data.success, true);
+    assert.ok(data.id);
+
+    // Verify log was stored
+    const logsRes = await fetch(`${BASE_URL}/api/logs`);
+    const logsData = await logsRes.json();
+    assert.ok(logsData.logs.some(log => log.message === 'Test error message'));
+  });
+
+  test('DELETE /api/logs clears all logs', async () => {
+    // First add a log
+    await fetch(`${BASE_URL}/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'info', message: 'Log to delete' })
+    });
+
+    // Then clear logs
+    const res = await fetch(`${BASE_URL}/api/logs`, { method: 'DELETE' });
+    assert.strictEqual(res.status, 200);
+
+    const data = await res.json();
+    assert.strictEqual(data.success, true);
+
+    // Verify logs were cleared
+    const logsRes = await fetch(`${BASE_URL}/api/logs`);
+    const logsData = await logsRes.json();
+    assert.strictEqual(logsData.total, 0);
   });
 
   test('GET /command returns 204 when no command pending', async () => {

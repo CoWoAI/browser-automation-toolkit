@@ -3,6 +3,7 @@
  */
 
 import { state } from '../state/index.js';
+import { logger } from './logger.js';
 
 /**
  * Ensure the accessibility tree content script is loaded in a tab
@@ -25,7 +26,7 @@ export async function ensureContentScript(tabId) {
     });
     return true;
   } catch (e) {
-    console.error('[BAT] Failed to inject content script:', e.message);
+    logger.error(`Failed to inject content script: ${e.message}`, { tabId });
     return false;
   }
 }

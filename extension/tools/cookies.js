@@ -3,6 +3,7 @@
  */
 
 import { parseNetscapeCookies, toNetscapeFormat, normalizeSameSite, buildCookieUrl } from '../utils/cookie-format.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Import cookies from JSON or Netscape format
@@ -88,7 +89,7 @@ export async function import_cookies({ cookies, format = 'json' }, tabId) {
       await chrome.cookies.set(cookieData);
       imported++;
     } catch (e) {
-      console.warn('[BAT] Failed to import cookie:', cookie.name, e.message);
+      logger.toolWarn('import_cookies', `Failed to import cookie "${cookie.name}": ${e.message}`);
       errors.push({ name: cookie.name, error: e.message });
       failed++;
     }

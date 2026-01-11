@@ -11,6 +11,12 @@ Your App → POST /command → server.js (8766) → Extension polls (configurabl
 ```
 
 **New in v2.2.0:**
+- **Server-side logging**: Extension errors sent to server instead of console
+- **Web UI dashboard**: Menu at `/` with links to logs, tools, status
+- **Logs viewer**: `/logs` page with filtering, search, export
+- **Tools reference**: `/tools` HTML page with categorized tool docs
+- **API restructure**: JSON APIs moved to `/api/*` endpoints
+- **Logger utility**: `extension/utils/logger.js` for server-side logging
 - Modular ES module architecture for extension service worker
 - 117 tools split into 29 category modules
 - Centralized state management
@@ -42,10 +48,12 @@ cd client && python3 server.py   # Port 8080
 
 ```
 browser-automation-toolkit/
-├── server.js                 # Node.js HTTP command server (80+ tools)
+├── server.js                 # Node.js HTTP command server (117 tools + web UI)
 ├── package.json              # Node.js project config (no dependencies)
+├── data/                     # Data directory (gitignored)
+│   └── logs.jsonl            # Server-side logs (JSONL format)
 ├── tests/
-│   └── server.test.js        # Comprehensive server tests
+│   └── server.test.js        # Comprehensive server tests (42 tests)
 ├── extension/
 │   ├── manifest.json         # Manifest V3, ES module service worker
 │   ├── service-worker.js     # Entry point (~130 lines) - imports tool modules
@@ -83,7 +91,8 @@ browser-automation-toolkit/
 │   ├── utils/                # Shared utilities
 │   │   ├── tab-utils.js      # getActiveTab, getWindow
 │   │   ├── content-script.js # ensureContentScript, exec
-│   │   └── cookie-format.js  # parseNetscapeCookies, toNetscapeFormat
+│   │   ├── cookie-format.js  # parseNetscapeCookies, toNetscapeFormat
+│   │   └── logger.js         # Server-side logging utility
 │   ├── state/                # Centralized state management
 │   │   └── index.js          # Console logs, network requests, mock responses
 │   ├── content/
@@ -237,13 +246,40 @@ Cookies should include a `url` field for reliable import. If missing, URL is con
 
 ## API
 
+### Web UI Endpoints (HTML)
 ```bash
-# Health check
+# Dashboard - menu with links to logs, tools, status
 curl http://127.0.0.1:8766/
 
-# List all tools
-curl http://127.0.0.1:8766/tools
+# Logs viewer - real-time log display with filtering
+curl http://127.0.0.1:8766/logs
 
+# Tools reference - categorized tool documentation
+curl http://127.0.0.1:8766/tools
+```
+
+### JSON API Endpoints
+```bash
+# Server status (JSON)
+curl http://127.0.0.1:8766/api/status
+
+# List all tools (JSON)
+curl http://127.0.0.1:8766/api/tools
+
+# Get logs with filtering
+curl "http://127.0.0.1:8766/api/logs?level=error&tool=screenshot&search=failed"
+
+# Clear all logs
+curl -X DELETE http://127.0.0.1:8766/api/logs
+
+# Submit log from extension
+curl -X POST http://127.0.0.1:8766/log \
+  -H "Content-Type: application/json" \
+  -d '{"level": "error", "message": "Tool failed", "tool": "screenshot"}'
+```
+
+### Command Endpoints
+```bash
 # Send command
 curl -X POST http://127.0.0.1:8766/command \
   -H "Content-Type: application/json" \
@@ -328,15 +364,18 @@ Tests use Node.js built-in test runner (requires Node 18+):
 npm test
 ```
 
-Tests cover:
-- HTTP endpoints (/, /tools, /command, /commands, /result)
+Tests cover (42 tests total):
+- Web UI endpoints (/, /logs, /tools - HTML)
+- API endpoints (/api/status, /api/tools, /api/logs - JSON)
+- Logging endpoints (POST /log, DELETE /api/logs)
+- Command endpoints (/command, /commands, /result)
 - Server-side tools (ping, get_tools)
 - Command queuing and result handling
 - Batch commands execution and error handling
 - SubtaskID propagation
 - Timeout behavior
 - CORS headers
-- Tool definitions validation (80+ tools)
+- Tool definitions validation (117 tools)
 
 ## Security Notes
 

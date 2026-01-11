@@ -1,11 +1,12 @@
 /**
- * Browser Automation Toolkit - Service Worker v2.1
+ * Browser Automation Toolkit - Service Worker v2.2
  * Modular architecture with ES modules
  */
 
 import { tools, getTool, tabRequiredTools } from './tools/index.js';
 import { getActiveTab } from './utils/tab-utils.js';
 import { addNetworkRequest } from './state/index.js';
+import { logger } from './utils/logger.js';
 
 // ============ SETTINGS ============
 
@@ -15,14 +16,15 @@ let settings = {
   pollInterval: 100
 };
 
-console.log('[BAT] Service worker v2.1 starting...');
+console.log('[BAT] Service worker v2.2 starting...');
 
 // Load settings from storage
 chrome.storage.local.get(['pollingEnabled', 'serverUrl', 'pollInterval']).then(stored => {
   if (stored.pollingEnabled !== undefined) settings.pollingEnabled = stored.pollingEnabled;
   if (stored.serverUrl) settings.serverUrl = stored.serverUrl;
   if (stored.pollInterval) settings.pollInterval = stored.pollInterval;
-  console.log('[BAT] Settings loaded:', settings);
+  // Keep this as console.log since it's startup info, not an operational log
+  console.log('[BAT] Settings loaded, polling:', settings.pollingEnabled);
 });
 
 // ============ REQUEST HANDLER ============
@@ -49,7 +51,7 @@ async function handleToolRequest(message) {
     const result = await handler(args, targetTabId);
     return { id, success: true, result };
   } catch (e) {
-    console.error(`[BAT] Tool error (${tool}):`, e);
+    logger.toolError(tool, e, { tabId: targetTabId, args });
     return { id, success: false, error: e.message };
   }
 }
@@ -67,7 +69,7 @@ async function pollForCommands() {
 
     if (response.status === 200) {
       const command = await response.json();
-      console.log('[BAT] Command:', command.tool);
+      logger.info(`Executing: ${command.tool}`, { tool: command.tool });
       const result = await handleToolRequest(command);
       await fetch(`${settings.serverUrl}/result`, {
         method: 'POST',
@@ -88,9 +90,9 @@ function restartPolling() {
   clearInterval(pollIntervalId);
   if (settings.pollingEnabled) {
     pollIntervalId = setInterval(pollForCommands, settings.pollInterval);
-    console.log('[BAT] Polling started with interval:', settings.pollInterval);
+    logger.debug(`Polling started with interval: ${settings.pollInterval}ms`);
   } else {
-    console.log('[BAT] Polling disabled');
+    logger.debug('Polling disabled');
   }
 }
 
@@ -129,5 +131,5 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   return true;
 });
 
-console.log('[BAT] Service worker v2.1 ready');
+console.log('[BAT] Service worker v2.2 ready');
 console.log('[BAT] Tools available:', Object.keys(tools).length);
