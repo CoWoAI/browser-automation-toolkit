@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Automation Toolkit",
-  "version": "2026.0110.1",
+  "version": "2026.0110.2",
   "description": "Browser automation via HTTP API",
   "permissions": [
     "scripting",

@@ -20,6 +20,8 @@ services:
       - PORT=8766
       - HOST=0.0.0.0
       - COMMAND_TIMEOUT=30000
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8766/"]
